@@ -1,0 +1,6 @@
+
+set CFLAGS and LDFLAGS to metis include and library dirs in configure
+
+For an example, if metis is in /home/agung/local/include and lib:
+
+./configure --prefix=<> CFLAGS=/home/agung/local/include LDFLAGS=/home/agung/local/lib
