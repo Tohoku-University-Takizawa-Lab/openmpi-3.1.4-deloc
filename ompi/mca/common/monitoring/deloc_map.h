@@ -32,6 +32,13 @@ struct info {
     char shm_name[16];
     long ts;
 };
+
+struct pair {
+    unsigned t1;
+    unsigned t2;
+    size_t ncomm;
+};
+
 typedef map_t(unsigned int) uint_map_t;
 
 bool stopDelocMon;
@@ -43,6 +50,8 @@ unsigned num_cores;
 unsigned num_nodes;
 hwloc_topology_t hw_topo;
 uint_map_t m;
+struct pair *pairs;
+int npairs;
 
 // Polling interval in seconds
 int pollInterval;
@@ -59,6 +68,7 @@ OMPI_DECLSPEC void get_commmat_shm(const char *shm_name, size_t *to_data, int np
 OMPI_DECLSPEC void get_all_commmat_shm();
 OMPI_DECLSPEC void init_deloc(orte_proc_info_t orte_proc_info, size_t * pml_data);
 OMPI_DECLSPEC void reset_comm_mat();
+OMPI_DECLSPEC void comm_mat_to_pairs(size_t **mat, struct pair *pairs);
 
 END_C_DECLS
 

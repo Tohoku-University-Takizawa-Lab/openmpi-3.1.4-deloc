@@ -5,6 +5,7 @@
  */
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stdlib.h>
 #include <sched.h>
 #include "opal/mca/base/mca_base_var.h"
 #include "opal/util/argv.h"
@@ -18,6 +19,13 @@
 #include "deloc_map.h"
 #include "map.h"
 #include "deloc_metis.h"
+
+
+int compare_pair (const void * a, const void * b) {
+    struct pair *p1 = (struct pair *) a;
+    struct pair *p2 = (struct pair *) b;
+    return (p2->ncomm - p1->ncomm);
+}
 
 void * detectThread(void *args) {
     struct info *f = (struct info *) args;
@@ -79,6 +87,12 @@ void * monitor_exec(void *args) {
                 printf("\n\t");
             }
             printf("\n");
+            
+            qsort(pairs, npairs, sizeof(struct pair), compare_pair);
+            for (int i = 0; i < npairs; i++) {
+                printf("\t%d-%d: %d\n", pairs[i].t1, pairs[i].t2, pairs[i].ncomm);
+            }
+            
             //map_proc_rand(pInfo->pid);
         }
     }
@@ -105,10 +119,26 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_PACKAGE);
         printf("[DeLoc] Topology num_nodes=%d, num_cores=%d\n", num_nodes,
                 num_cores);
+        
+        npairs = num_local_procs * (num_local_procs-1) /2;
+        pairs = (struct pair *) malloc(npairs * sizeof (struct pair));
+        for (int i = 0; i < npairs; i++) {
+            pairs[i].ncomm = 0;
+        }
+        printf("[DeLoc] Number of process pairs: %d\n", npairs);
 	map_init(&m);
     }
     stopDelocMon = false;
     pollInterval = 5;
+   
+//    for (int i = 0; i < num_local_procs; i++) {
+//        for (int j = i; j < num_local_procs; j++) {
+//            pairs[i]->t1 = i;
+//            pairs[i]->t2 = j;
+//            pairs[i]->ncomm = 0;
+//            pairs[j]->szcomm = 0;
+//        }
+//    }
     pthread_create(&delocThread, NULL, monitor_exec, (void *) pml_data);
 }
 
@@ -132,6 +162,8 @@ void stop_deloc() {
     del_commmat_shm(pInfo->shm_name);
     if (pInfo->local_rank == 0)
         free(comm_mat);
+    free(pInfo);
+    free(pairs);
     printf("[DeLoc-%d] Monitoring stopped\n", pInfo->local_rank);
     //pthread_join(detectorThread, NULL);
     //pthread_exit(NULL);
@@ -254,15 +286,15 @@ void get_commmat_shm(const char *shm_name, size_t *to_data, int np) {
 void get_all_commmat_shm() {
     const int SIZE = sizeof (size_t) * num_local_procs;
     char shm_name[16];
-    int shm_fd;
+    int shm_fd, r, i;
     size_t *ptr;
 
     reset_comm_mat();
-    for (int r = 0; r < num_local_procs; r++) {
+    for (r = 0; r < num_local_procs; r++) {
         snprintf(shm_name, 16, "DELOC-%d", r);
         if ((shm_fd = shm_open(shm_name, O_RDONLY, 0666)) >= 0) {
             ptr = (size_t *) mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
-            for (int i = 0; i < num_local_procs; i++) {
+            for (i = 0; i < num_local_procs; i++) {
                 comm_mat[r][i] += ptr[i];
                 comm_mat[i][r] += ptr[i];
             }
@@ -270,6 +302,19 @@ void get_all_commmat_shm() {
             close(shm_fd);
         } else {
             printf("Error: failed reading shm\n");
+        }
+    }
+    comm_mat_to_pairs(comm_mat, pairs);
+}
+
+void comm_mat_to_pairs(size_t **mat, struct pair *pairs) {
+    int j = 0;
+    for (int r = 0; r < num_local_procs; r++) {
+        for (int i = r+1; i < num_local_procs; i++) {
+            pairs[j].t1 = r;
+            pairs[j].t2 = i;
+            pairs[j].ncomm = mat[r][i];
+            j++;
         }
     }
 }

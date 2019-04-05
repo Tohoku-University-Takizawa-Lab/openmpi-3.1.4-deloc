@@ -9,10 +9,14 @@
 #include <stdio.h>
 #include "deloc_metis.h"
 
+void sort_comm_mat(size_t *mat) {
+    
+}
+
 int test_metis(){
 
     idx_t nVertices = 6;
-    idx_t nEdges    = 7;
+    //idx_t nEdges    = 7;
     idx_t nWeights  = 1;
     idx_t nParts    = 2;
 
@@ -31,7 +35,7 @@ int test_metis(){
     // Weights of vertices
     // if all weights are equal then can be set to NULL
     //idx_t vwgt[nVertices * nWeights];
-    idx_t vwgt[6 * 1];
+    //idx_t vwgt[6 * 1];
     
 
     // int ret = METIS_PartGraphRecursive(&nVertices,& nWeights, xadj, adjncy,
@@ -49,5 +53,6 @@ int test_metis(){
     }*/
 
     
-    return 0;
+    //return 0;
+    return ret;
 }

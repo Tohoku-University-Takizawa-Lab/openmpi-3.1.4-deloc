@@ -16,5 +16,8 @@
 
 #include <metis.h>
 
+int test_metis(void);
+void sort_comm_mat(size_t *mat);
+
 #endif /* DELOC_METIS_H */
 
