@@ -39,7 +39,15 @@ struct pair {
     size_t ncomm;
 };
 
-typedef map_t(unsigned int) uint_map_t;
+struct d_task {
+    unsigned task_id;
+    __pid_t pid;
+    unsigned core_id;
+    size_t load;
+};
+
+//typedef map_t(unsigned int) uint_map_t;
+typedef map_t(__pid_t) pid_map_t;
 
 bool stopDelocMon;
 pthread_t delocThread;
@@ -49,9 +57,11 @@ int num_local_procs;
 unsigned num_cores;
 unsigned num_nodes;
 hwloc_topology_t hw_topo;
-uint_map_t m;
+//uint_map_t m;
 struct pair *pairs;
+struct d_task *d_tasks;
 int npairs;
+pid_map_t proc_pid_maps;
 
 // Polling interval in seconds
 int pollInterval;
@@ -64,8 +74,10 @@ OMPI_DECLSPEC void map_proc_rand(__pid_t pid);
 OMPI_DECLSPEC void init_commmat_shm(int np, const char *shm_name);
 OMPI_DECLSPEC void del_commmat_shm(const char *shm_name);
 OMPI_DECLSPEC void update_commmat_shm(const char *shm_name, size_t *data, int np);
+OMPI_DECLSPEC void update_task_shm(struct info *task_info);
 OMPI_DECLSPEC void get_commmat_shm(const char *shm_name, size_t *to_data, int np);
 OMPI_DECLSPEC void get_all_commmat_shm();
+OMPI_DECLSPEC void get_all_task_shm();
 OMPI_DECLSPEC void init_deloc(orte_proc_info_t orte_proc_info, size_t * pml_data);
 OMPI_DECLSPEC void reset_comm_mat();
 OMPI_DECLSPEC void comm_mat_to_pairs(size_t **mat, struct pair *pairs);

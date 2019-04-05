@@ -94,6 +94,14 @@ void * monitor_exec(void *args) {
             }
             
             //map_proc_rand(pInfo->pid);
+            get_all_task_shm();
+            const char *key;
+            map_iter_t iter = map_iter(&proc_pid_maps);
+
+            while ((key = map_next(&proc_pid_maps, &iter))) {
+              printf("%s -> %d ", key, *map_get(&proc_pid_maps, key));
+            }
+            printf("\n");
         }
     }
 }
@@ -101,6 +109,7 @@ void * monitor_exec(void *args) {
 void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     pInfo = (struct info *) malloc(sizeof (struct info));
     get_proc_info(orte_proc_info);
+    update_task_shm(pInfo);
     num_local_procs = pInfo->num_local_peers + 1;
     snprintf(pInfo->shm_name, 16, "DELOC-%d", pInfo->local_rank);
     //init_commmat_shm(pInfo->num_peers, pInfo->shm_name);
@@ -120,13 +129,15 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         printf("[DeLoc] Topology num_nodes=%d, num_cores=%d\n", num_nodes,
                 num_cores);
         
+        d_tasks = (struct d_task *) malloc(num_local_procs * sizeof (struct d_task));
         npairs = num_local_procs * (num_local_procs-1) /2;
         pairs = (struct pair *) malloc(npairs * sizeof (struct pair));
         for (int i = 0; i < npairs; i++) {
             pairs[i].ncomm = 0;
         }
         printf("[DeLoc] Number of process pairs: %d\n", npairs);
-	map_init(&m);
+	//map_init(&m);
+        map_init(&proc_pid_maps);
     }
     stopDelocMon = false;
     pollInterval = 5;
@@ -167,6 +178,8 @@ void stop_deloc() {
     printf("[DeLoc-%d] Monitoring stopped\n", pInfo->local_rank);
     //pthread_join(detectorThread, NULL);
     //pthread_exit(NULL);
+    //map_deinit(&m);
+    map_deinit(&proc_pid_maps);
 }
 
 void get_proc_info(orte_proc_info_t orte_proc_info) {
@@ -305,6 +318,54 @@ void get_all_commmat_shm() {
         }
     }
     comm_mat_to_pairs(comm_mat, pairs);
+}
+
+void get_all_task_shm() {
+    const int SIZE = sizeof (size_t) * num_local_procs;
+    char shm_name[24];
+    int shm_fd, r;
+    struct info *ptr;
+    
+    __pid_t *val = map_get(&proc_pid_maps, "0");
+    if (val == NULL) {
+        for (r = 0; r < num_local_procs; r++) {
+            snprintf(shm_name, 24, "DELOC-info-%d", r);
+            if ((shm_fd = shm_open(shm_name, O_RDONLY, 0666)) >= 0) {
+                ptr = (struct info *) mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
+                char rank_s[16];
+                snprintf(rank_s, 16, "%d", ptr->local_rank);
+                
+                map_set(&proc_pid_maps, rank_s, ptr->pid);
+                d_tasks[r].task_id = ptr->pid;
+                
+                close(shm_fd);
+            } else {
+                printf("Error: failed reading tasks shm\n");
+            }
+        }
+    }
+}
+
+void update_task_shm(struct info *p_info) {
+    char info_shm[24];
+    snprintf(info_shm, 16, "DELOC-info-%d", pInfo->local_rank);
+    const int SIZE = sizeof (struct info);
+    int shm_fd, ret;
+    struct info *ptr;
+    if ((shm_fd = shm_open(info_shm, O_CREAT | O_RDWR, 0666)) >= 0) {
+        ret = ftruncate(shm_fd, SIZE);
+        ptr = (struct info *) mmap(0, SIZE, PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        ptr->local_rank = p_info->local_rank;
+        ptr->node_rank = p_info->node_rank;
+        ptr->num_local_peers = p_info->num_local_peers;
+        ptr->pid = p_info->pid;
+        ptr->ts = p_info->ts;
+        
+        munmap(ptr, SIZE);
+        close(shm_fd);
+    } else {
+        printf("Err: failed writing task info to shm\n");
+    }
 }
 
 void comm_mat_to_pairs(size_t **mat, struct pair *pairs) {
