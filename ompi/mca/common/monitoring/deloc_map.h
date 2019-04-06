@@ -62,6 +62,7 @@ struct pair *pairs;
 struct d_task *d_tasks;
 int npairs;
 pid_map_t proc_pid_maps;
+unsigned *cur_mapping;
 
 // Polling interval in seconds
 int pollInterval;
@@ -70,6 +71,7 @@ OMPI_DECLSPEC void run_detector(__pid_t pid, int rank);
 OMPI_DECLSPEC void stop_deloc();
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
 OMPI_DECLSPEC void map_proc(__pid_t pid, int core_id);
+OMPI_DECLSPEC void map_rank(unsigned rank_id, int core_id);
 OMPI_DECLSPEC void map_proc_rand(__pid_t pid);
 OMPI_DECLSPEC void init_commmat_shm(int np, const char *shm_name);
 OMPI_DECLSPEC void del_commmat_shm(const char *shm_name);
@@ -81,6 +83,7 @@ OMPI_DECLSPEC void get_all_task_shm();
 OMPI_DECLSPEC void init_deloc(orte_proc_info_t orte_proc_info, size_t * pml_data);
 OMPI_DECLSPEC void reset_comm_mat();
 OMPI_DECLSPEC void comm_mat_to_pairs(size_t **mat, struct pair *pairs);
+OMPI_DECLSPEC void get_proc_affinity(__pid_t pid);
 
 END_C_DECLS
 

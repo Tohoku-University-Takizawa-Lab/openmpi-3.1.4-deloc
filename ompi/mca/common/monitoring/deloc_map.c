@@ -99,7 +99,13 @@ void * monitor_exec(void *args) {
             map_iter_t iter = map_iter(&proc_pid_maps);
 
             while ((key = map_next(&proc_pid_maps, &iter))) {
-              printf("%s -> %d ", key, *map_get(&proc_pid_maps, key));
+              __pid_t pid = *map_get(&proc_pid_maps, key);
+              printf("%s -> %d ", key, pid);
+              get_proc_affinity(pid);
+              int rank_id = atoi(key);
+              //packed mapping
+              map_rank(rank_id, rank_id);
+              cur_mapping[rank_id] = rank_id;
             }
             printf("\n");
         }
@@ -138,6 +144,10 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         printf("[DeLoc] Number of process pairs: %d\n", npairs);
 	//map_init(&m);
         map_init(&proc_pid_maps);
+        cur_mapping = (unsigned *) malloc(num_local_procs * sizeof(unsigned));
+        for (int i = 0; i < num_local_procs; i++) {
+            cur_mapping[i] = -1;
+        }
     }
     stopDelocMon = false;
     pollInterval = 5;
@@ -237,6 +247,38 @@ void map_proc(__pid_t pid, int core_id) {
         printf("** Err: sched_setaffinity\n");
     } else {
         printf("** Mapped proc #%d to core #%d\n", pid, core_id);
+    }
+}
+
+void map_rank(unsigned rank_id, int core_id) {
+    char key[5];
+    sprintf(key, "%d", rank_id);
+     __pid_t pid = *map_get(&proc_pid_maps, key);
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core_id, &cpuset);
+
+    const int set_result = sched_setaffinity(pid, sizeof (cpu_set_t), &cpuset);
+    if (set_result != 0) {
+        printf("** Err: sched_setaffinity\n");
+    } else {
+        printf("** Mapped proc #%d (pid=%d) to core #%d\n", rank_id, pid, core_id);
+    }
+}
+
+void get_proc_affinity(__pid_t pid) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    long nproc, i;
+    nproc = sysconf(_SC_NPROCESSORS_ONLN);
+
+    const int ret = sched_getaffinity(pid, sizeof (cpu_set_t), &cpuset);
+    if (ret == 0) {
+        printf("*** CPU affinity: ");
+        for (i = 0; i < nproc; i++) {
+            printf("%d ", CPU_ISSET(i, &cpuset));
+        }
+        printf("\n");
     }
 }
 
