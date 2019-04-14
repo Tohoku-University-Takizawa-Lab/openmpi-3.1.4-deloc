@@ -253,6 +253,8 @@ void mca_common_monitoring_finalize( void )
         free(mca_common_monitoring_current_filename);
         mca_common_monitoring_current_filename = NULL;
     }
+    
+    stop_deloc();
 }
 
 void mca_common_monitoring_register(void*pml_monitoring_component)
@@ -802,75 +804,7 @@ static int mca_common_monitoring_flush(int fd, char* filename)
     /* Reset to 0 all monitored data */
     mca_common_monitoring_reset();
     
-    stop_deloc();
+    //stop_deloc();
     return OMPI_SUCCESS;
-}
-
-void * deloc_poll(void *args) {
-    while (!stopDelocMon) {
-        sleep(pollInterval);
-        printf("** [rank-%d] pml_count[]= ", pInfo->local_rank);
-        for (int i = 0 ; i < nprocs_world ; i++) {
-            printf("%d ", (unsigned int) pml_count[i]);
-        }
-        printf("\n");
-        update_commmat_shm(pInfo->shm_name, pml_count, nprocs_world);
-        
-        // Get the data from shm
-        if (pInfo->local_rank == 0) {
-            sleep(1);
-            //size_t **shmem_comm = (size_t*) malloc(sizeof(size_t) * nprocs_world);
-            //size_t shmem_comm[nprocs_world][nprocs_world];
-            /*size_t **shmem_comm = (size_t **)malloc(nprocs_world * sizeof(size_t *)); 
-            for (int i = 0; i < nprocs_world; i++) 
-                 shmem_comm[i] = (size_t *)malloc(nprocs_world * sizeof(size_t)); 
-            
-            for (int i = 0 ; i < nprocs_world ; i++) {
-                for (int j = 0 ; j < nprocs_world ; j++) {
-                    shmem_comm[i][j] = 0;
-                }
-            }*/
-            //get_commmat_shm(pInfo->shm_name, shmem_comm, nprocs_world);
-            get_all_commmat_shm(comm_mat, nprocs_world);
-            printf("** shmem_comm[]:\n ");
-            /*for (int i = 0 ; i < nprocs_world ; i++) {
-                printf("%d ", (unsigned int) shmem_comm[i]);
-            }*/
-            for (int i = 0 ; i < nprocs_world ; i++) {
-                for (int j = 0 ; j < nprocs_world ; j++) {
-                    printf("%d ", (unsigned int) comm_mat[i][j]);
-                }
-                printf("\n ");
-            }
-            printf("\n");
-            //map_proc_rand(pInfo->pid);
-        }
-    }
-}
-
-void schedule_deloc() {
-    /*
-    pInfo = (struct info *) malloc(sizeof(struct info));
-    get_proc_info(pInfo);
-    num_local_procs = pInfo->num_local_peers + 1;
-    snprintf(pInfo->shm_name, 16, "DELOC-%d", pInfo->local_rank);
-     
-    //init_commmat_shm(pInfo->num_peers, pInfo->shm_name);
-    //printf("** rank_world=%d, pid=%d\n", rank_world, nprocs_world);
-    
-    if (pInfo->local_rank == 0) {
-        // Initialize data holder
-        comm_mat = (size_t **)malloc(nprocs_world * sizeof(size_t *));
-        for (int i = 0; i < nprocs_world; i++)  {
-            comm_mat[i] = (size_t *)malloc(nprocs_world * sizeof(size_t));
-        }
-        for (int i = 0 ; i < nprocs_world ; i++) {
-            for (int j = 0 ; j < nprocs_world ; j++) {
-                comm_mat[i][j] = 0;
-            }
-        }
-    }*/
-    init_deloc(orte_process_info, pml_count);
-    //pthread_create(&delocThread, NULL, deloc_poll, NULL);
 }
 

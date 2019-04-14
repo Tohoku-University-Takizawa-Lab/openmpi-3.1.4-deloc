@@ -28,42 +28,29 @@ int compare_pair(const void * a, const void * b) {
     return (p2->ncomm - p1->ncomm);
 }
 
-void * detectThread(void *args) {
-    struct info *f = (struct info *) args;
-    pthread_t tid = pthread_self();
-    printf("** [DeLoc t#%lu] Starting detector (pid=%d)..\n",
-            (unsigned long) tid, f->pid);
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    long nproc, i;
-    nproc = sysconf(_SC_NPROCESSORS_ONLN);
-    while (!stopDelocMon) {
-        sleep(5);
-        // get current affinity
-        const int get_aff = sched_getaffinity(f->pid, sizeof (cpu_set_t), &cpuset);
-        printf("** [DeLoc t#%lu rank#%d] Detector wakes up..\n", (unsigned long) tid, f->node_rank);
-        printf("*** get_affinity: ");
-        for (i = 0; i < nproc; i++) {
-            printf("%d ", CPU_ISSET(i, &cpuset));
-        }
-        printf("\n");
-    }
-}
-
 void * monitor_exec(void *args) {
+    int i;//, j;
     size_t *pml_data = (size_t *) args;
     while (!stopDelocMon) {
-        sleep(pollInterval);
+        usleep(pollInterval);
+        pollInterval *= 2;
+        /*
         printf("** [rank-%d] pml_count[]= ", pInfo->local_rank);
         for (int i = 0; i < num_local_procs; i++) {
             printf("%d ", (unsigned int) pml_data[i]);
         }
         printf("\n");
+        */
+        //
+        //for (i = 0; i < num_local_procs; i++) {
+        //    prev_pml_data[i] = pml_data[i] - prev_pml_data[i]; 
+        //}
+        //update_commmat_shm(pInfo->shm_name, prev_pml_data, num_local_procs);
         update_commmat_shm(pInfo->shm_name, pml_data, num_local_procs);
 
         // Get the data from shm
         if (pInfo->local_rank == 0) {
-            sleep(1);
+            usleep(1000000);
             //size_t **shmem_comm = (size_t*) malloc(sizeof(size_t) * nprocs_world);
             //size_t shmem_comm[nprocs_world][nprocs_world];
             /*size_t **shmem_comm = (size_t **)malloc(nprocs_world * sizeof(size_t *)); 
@@ -78,41 +65,58 @@ void * monitor_exec(void *args) {
             // Update comm. matrix
             //get_commmat_shm(pInfo->shm_name, shmem_comm, nprocs_world);
             get_all_commmat_shm();
-            printf("** comm_mat[]:\n\t");
             /*for (int i = 0 ; i < nprocs_world ; i++) {
                 printf("%d ", (unsigned int) shmem_comm[i]);
             }*/
-            for (int i = 0; i < num_local_procs; i++) {
-                for (int j = 0; j < num_local_procs; j++) {
+            /*
+            printf("** Communication matrix:\n\t");
+            for (i = 0; i < num_local_procs; i++) {
+                for (j = 0; j < num_local_procs; j++) {
                     printf("%d ", (unsigned int) comm_mat[i][j]);
                 }
                 printf("\n\t");
             }
-            printf("\n");
-            // Update task loads
+            putchar('\n');
+            */
+            // Update task loads, required by DeLocTL
+            /*
             comm_mat_to_task_loads(comm_mat, task_loads);
             for (int i = 0; i < num_tasks; i++) {
                 printf("\tTask-%d, load=%ld\n", task_loads[i].id, task_loads[i].load);
             }
+            */
 
             // Do Mapping
             map_deloc();
             // Enforce the mapping
-            get_all_task_shm();
+            if (num_pids < num_tasks) {
+                get_all_task_shm();
+            }
+            // Array based implementation
+            for (i = 0; i < num_tasks; i++) {
+                //printf("Task-%d: pid #%d ", i, task_pids[i]);
+                map_proc(task_pids[i], task_core[i]);
+                get_proc_affinity(task_pids[i]);
+            }
+            //putchar('\n');
+
+            /* KeyMap implementation
             const char *key;
             map_iter_t iter = map_iter(&proc_pid_maps);
 
             while ((key = map_next(&proc_pid_maps, &iter))) {
                 __pid_t pid = *map_get(&proc_pid_maps, key);
-                printf("%s -> %d ", key, pid);
+                printf("Task-%s: pid #%d ", key, pid);
                 int rank_id = atoi(key);
+                //map_proc(pid, task_core[rank_id]);
+                // Use the physical id for binding
                 map_proc(pid, task_core[rank_id]);
                 get_proc_affinity(pid);
                 //map_rank(rank_id, rank_id);
                 //cur_mapping[rank_id] = rank_id;
             }
             printf("\n");
-
+            */
             /*
             qsort(pairs, npairs, sizeof (struct pair), compare_pair);
             for (int i = 0; i < npairs; i++) {
@@ -137,42 +141,70 @@ void * monitor_exec(void *args) {
              */
         }
     }
+    pthread_exit(NULL);
+    //return NULL;
 }
 
 void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
+    int i, j;
     pInfo = (struct info *) malloc(sizeof (struct info));
     get_proc_info(orte_proc_info);
     update_task_shm(pInfo);
     num_local_procs = pInfo->num_local_peers + 1;
     snprintf(pInfo->shm_name, 16, "DELOC-%d", pInfo->local_rank);
+    
+    // Initialize delta pml data
+    //prev_pml_data = (size_t *) malloc(num_local_procs * sizeof (size_t));
+    //for (i = 0; i < num_local_procs; i++) {
+    //    prev_pml_data[i] = 0;
+    //}
     //init_commmat_shm(pInfo->num_peers, pInfo->shm_name);
     //printf("** rank_world=%d, pid=%d\n", rank_world, nprocs_world);
     if (pInfo->local_rank == 0) {
+        // For rand()
+        //srand(pInfo->pid);
+
         // Initialize communication matrix
         comm_mat = (size_t **) malloc(num_local_procs * sizeof (size_t *));
-        for (int i = 0; i < num_local_procs; i++) {
+        //prev_comm_mat = (size_t **) malloc(num_local_procs * sizeof (size_t *));
+        for (i = 0; i < num_local_procs; i++) {
             comm_mat[i] = (size_t *) malloc(num_local_procs * sizeof (size_t));
+        //    prev_comm_mat[i] = (size_t *) malloc(num_local_procs * sizeof (size_t));
+        }
+        for (i = 0; i < num_local_procs; i++) {
+            for (j = 0; j < num_local_procs; j++) {
+        //        prev_comm_mat[i][j] = 0;
+                comm_mat[i][j] = 0;
+            }
         }
         //reset_comm_mat();
         // Get node information
         hwloc_topology_init(&hw_topo);
         hwloc_topology_load(hw_topo);
         num_cores = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_CORE);
+        int num_pus = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_PU);
         num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_PACKAGE);
-        n_cores_per_node = num_cores / num_nodes;
-        printf("[DeLoc] Topology num_nodes=%d, num_cores=%d, n_cores_per_node=%d\n", num_nodes,
-                num_cores, n_cores_per_node);
+        printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_cores_per_node=%d\n", num_nodes,
+                num_pus, num_cores, n_cores_per_node);
 
-        d_tasks = (struct d_task *) malloc(num_local_procs * sizeof (struct d_task));
+        //d_tasks = (struct d_task *) malloc(num_local_procs * sizeof (struct d_task));
         npairs = num_local_procs * (num_local_procs - 1) / 2;
         num_tasks = num_local_procs;
         pairs = (struct pair *) malloc(npairs * sizeof (struct pair));
-        for (int i = 0; i < npairs; i++) {
+        for (i = 0; i < npairs; i++) {
             pairs[i].ncomm = 0;
         }
-        printf("[DeLoc] Number of process pairs: %d\n", npairs);
-        //map_init(&m);
-        map_init(&proc_pid_maps);
+        printf("[DeLoc] Number of tasks=%d, number of pairs=%d\n", num_tasks, npairs);
+
+        // Use physical core if possible
+        if (num_tasks > num_cores) {
+            num_cores = num_pus;
+        }
+        n_cores_per_node = num_cores / num_nodes;
+
+        num_pids = 0;
+        task_pids = (__pid_t *) malloc(num_tasks * sizeof(__pid_t));
+        //map_init(&proc_pid_maps);
         cur_mapping = (unsigned *) malloc(num_local_procs * sizeof (unsigned));
         for (int i = 0; i < num_local_procs; i++) {
             cur_mapping[i] = -1;
@@ -217,7 +249,8 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         */
     }
     stopDelocMon = false;
-    pollInterval = 5;
+    // Poll interval in microseconds
+    pollInterval = 2000000;
 
     //    for (int i = 0; i < num_local_procs; i++) {
     //        for (int j = i; j < num_local_procs; j++) {
@@ -234,40 +267,40 @@ void reset_comm_mat() {
     for (int i = 0; i < num_local_procs; i++) {
         for (int j = 0; j < num_local_procs; j++) {
             comm_mat[i][j] = 0;
+            //prev_comm_mat[i][j] = 0;
         }
     }
 }
 
-void run_detector(__pid_t pid, int rank) {
-    struct info *f = (struct info *) malloc(sizeof (struct info));
-    f->pid = pid;
-    f->node_rank = rank;
-    pthread_create(&delocThread, NULL, detectThread, (void *) f);
-}
-
 void stop_deloc() {
+    char info_shm[24];
     stopDelocMon = true;
-    del_commmat_shm(pInfo->shm_name);
-    if (pInfo->local_rank == 0)
-        free(comm_mat);
+    del_shm(pInfo->shm_name);
+    snprintf(info_shm, 16, "DELOC-info-%d", pInfo->local_rank);
+    del_shm(info_shm);
     free(pInfo);
-    free(pairs);
-    free(node_cpus);
-    free(node_core_start);
-    free(task_core);
-    printf("[DeLoc-%d] Monitoring stopped\n", pInfo->local_rank);
-    //pthread_join(detectorThread, NULL);
-    //pthread_exit(NULL);
-    //map_deinit(&m);
-    map_deinit(&proc_pid_maps);
+
+    //free(prev_pml_data);
+    if (pInfo->local_rank == 0) {
+        free(comm_mat);
+        //free(prev_comm_mat);
+        free(node_cpus);
+        free(pairs);
+        free(node_core_start);
+        free(task_core);
+        free(task_pids);
+        //map_deinit(&proc_pid_maps);
+    }
+    //printf("[DeLoc-%d] Monitoring stopped\n", pInfo->local_rank);
+    
 }
 
 void get_proc_info(orte_proc_info_t orte_proc_info) {
-    int id, ret;
+    //int id, ret;
     //const char **tmp = NULL;
-    const int *tmp = NULL;
+    //const int *tmp = NULL;
     //char **lines = NULL;
-    //OMPI_DECLSPEC void update_commmat_shm(const char *shm_name, size_t *data, int np);
+    //OMPI_DECLSPEC void jupdate_commmat_shm(const char *shm_name, size_t *data, int np);
     /*
     id = mca_base_var_find("orte", "orte", NULL, "app_rank");
     if (id < 0) {
@@ -300,14 +333,13 @@ void get_proc_info(orte_proc_info_t orte_proc_info) {
     pInfo->pid = orte_proc_info.pid;
     pInfo->num_local_peers = orte_proc_info.num_local_peers;
 
-    printf("[DeLoc-%d] pid=%d, num_peers=%d, local_rank=%d\n", pInfo->node_rank,
-            pInfo->pid, pInfo->num_local_peers, pInfo->local_rank);
+    //printf("[DeLoc-%d] pid=%d, num_peers=%d, local_rank=%d\n", pInfo->node_rank,
+    //        pInfo->pid, pInfo->num_local_peers, pInfo->local_rank);
 
-    // For initial random
-    srand(pInfo->pid);
 }
 
-void map_proc(__pid_t pid, int core_id) {
+void map_proc(__pid_t pid, int pu_id) {
+    int core_id = numa_cores[pu_id];
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
@@ -315,9 +347,11 @@ void map_proc(__pid_t pid, int core_id) {
     const int set_result = sched_setaffinity(pid, sizeof (cpu_set_t), &cpuset);
     if (set_result != 0) {
         printf("** Err: sched_setaffinity\n");
-    } else {
-        printf("** Mapped proc #%d to core #%d\n", pid, core_id);
     }
+    /*else {
+        printf("** Mapped pid #%d to pu #%d (core-%d)\n", pid, pu_id, core_id);
+    }
+    */
 }
 
 void map_rank(unsigned rank_id, int core_id) {
@@ -339,17 +373,22 @@ void map_rank(unsigned rank_id, int core_id) {
 void get_proc_affinity(__pid_t pid) {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    long nproc, i;
-    nproc = sysconf(_SC_NPROCESSORS_ONLN);
+    //long nproc, i;
+    //long nproc = sysconf(_SC_NPROCESSORS_ONLN);
 
     const int ret = sched_getaffinity(pid, sizeof (cpu_set_t), &cpuset);
-    if (ret == 0) {
+    if (ret != 0) {
+        printf("** Err: get_affinity\n");
+    }
+    /*
+    else {
+        //(ret == 0)
         printf("*** CPU affinity: ");
         for (i = 0; i < nproc; i++) {
             printf("%d ", CPU_ISSET(i, &cpuset));
         }
         printf("\n");
-    }
+    }*/
 }
 
 void map_proc_rand(__pid_t pid) {
@@ -361,34 +400,45 @@ void map_proc_rand(__pid_t pid) {
 void init_commmat_shm(int np, const char *shm_name) {
     const int SIZE = sizeof (size_t) * np;
     //const char* name = "DELOC";
-    int shm_fd, ret;
-    int* ptr;
+    int shm_fd;
+    //int ret;
+    //int* ptr;
 
     shm_fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
-    ret = ftruncate(shm_fd, SIZE);
-    ptr = mmap(0, SIZE, PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    printf("[DeLoc] Created shmem storage for comm: %s\n", shm_name);
+    //ret = ftruncate(shm_fd, SIZE);
+    ftruncate(shm_fd, SIZE);
+    //if (ret == 0) {
+        mmap(0, SIZE, PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        printf("[DeLoc] Created shmem storage for comm: %s\n", shm_name);
+    //}
     close(shm_fd);
 }
 
 void update_commmat_shm(const char *shm_name, size_t *data, int np) {
     const int SIZE = sizeof (size_t) * np;
-    int shm_fd, ret;
+    int shm_fd;
+    //int ret;
     size_t *ptr;
     if ((shm_fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666)) >= 0) {
-        ret = ftruncate(shm_fd, SIZE);
-        ptr = (size_t *) mmap(0, SIZE, PROT_WRITE, MAP_SHARED, shm_fd, 0);
-        for (int i = 0; i < np; i++) {
-            ptr[i] = data[i];
-        }
-        munmap(ptr, SIZE);
+        //ret = ftruncate(shm_fd, SIZE);
+        ftruncate(shm_fd, SIZE);
+        //if (ret == 0) {
+            ptr = (size_t *) mmap(0, SIZE, PROT_WRITE, MAP_SHARED, shm_fd, 0);
+            for (int i = 0; i < np; i++) {
+                ptr[i] = data[i];
+            }
+            munmap(ptr, SIZE);
+        //}
+        //else {
+        //    printf("Err: failed ftruncate() shm: %s\n", shm_name);
+        //}
         close(shm_fd);
     } else {
         printf("Err: failed writing to shm\n");
     }
 }
 
-void del_commmat_shm(const char *shm_name) {
+void del_shm(const char *shm_name) {
     shm_unlink(shm_name);
 }
 
@@ -411,7 +461,7 @@ void get_commmat_shm(const char *shm_name, size_t *to_data, int np) {
 void get_all_commmat_shm() {
     const int SIZE = sizeof (size_t) * num_local_procs;
     char shm_name[16];
-    int shm_fd, r, i;
+    int shm_fd, r, i;//, j;
     size_t *ptr;
 
     reset_comm_mat();
@@ -422,6 +472,8 @@ void get_all_commmat_shm() {
             for (i = 0; i < num_local_procs; i++) {
                 comm_mat[r][i] += ptr[i];
                 comm_mat[i][r] += ptr[i];
+                //prev_comm_mat[r][i] += ptr[i];
+                //prev_comm_mat[i][r] += ptr[i];
             }
             //munmap(comm_mat, SIZE);
             close(shm_fd);
@@ -429,6 +481,13 @@ void get_all_commmat_shm() {
             printf("Error: failed reading shm\n");
         }
     }
+    /*
+    for (i = 0; i < num_local_procs; i++) {
+        for (j = i+1; j < num_local_procs; j++) {
+            comm_mat[i][j] = prev_comm_mat[i][j]-comm_mat[i][j];
+        }
+    }
+    */
     comm_mat_to_pairs(comm_mat, pairs);
     //print_pairs();
 }
@@ -439,6 +498,24 @@ void get_all_task_shm() {
     int shm_fd, r;
     struct info *ptr;
 
+    for (r = 0; r < num_local_procs; r++) {
+        snprintf(shm_name, 24, "DELOC-info-%d", r);
+        if ((shm_fd = shm_open(shm_name, O_RDONLY, 0666)) >= 0) {
+            ptr = (struct info *) mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
+            char rank_s[16];
+            snprintf(rank_s, 16, "%d", ptr->local_rank);
+
+            //d_tasks[r].task_id = ptr->pid;
+            task_pids[r] = ptr->pid;
+            num_pids++;
+
+            close(shm_fd);
+        } else {
+            printf("Error: failed reading tasks shm\n");
+        }
+    }
+    // KeyMap-based implementation
+    /*
     __pid_t *val = map_get(&proc_pid_maps, "0");
     if (val == NULL) {
         for (r = 0; r < num_local_procs; r++) {
@@ -450,6 +527,8 @@ void get_all_task_shm() {
 
                 map_set(&proc_pid_maps, rank_s, ptr->pid);
                 d_tasks[r].task_id = ptr->pid;
+                task_pids[r] = ptr->pid;
+                num_pids++;
 
                 close(shm_fd);
             } else {
@@ -457,24 +536,31 @@ void get_all_task_shm() {
             }
         }
     }
+    */
 }
 
 void update_task_shm(struct info *p_info) {
     char info_shm[24];
     snprintf(info_shm, 16, "DELOC-info-%d", pInfo->local_rank);
     const int SIZE = sizeof (struct info);
-    int shm_fd, ret;
+    int shm_fd; //int ret;
     struct info *ptr;
     if ((shm_fd = shm_open(info_shm, O_CREAT | O_RDWR, 0666)) >= 0) {
-        ret = ftruncate(shm_fd, SIZE);
-        ptr = (struct info *) mmap(0, SIZE, PROT_WRITE, MAP_SHARED, shm_fd, 0);
-        ptr->local_rank = p_info->local_rank;
-        ptr->node_rank = p_info->node_rank;
-        ptr->num_local_peers = p_info->num_local_peers;
-        ptr->pid = p_info->pid;
-        ptr->ts = p_info->ts;
+        //ret = ftruncate(shm_fd, SIZE);
+        ftruncate(shm_fd, SIZE);
+        //if (ret == 0) {
+            ptr = (struct info *) mmap(0, SIZE, PROT_WRITE, MAP_SHARED, shm_fd, 0);
+            ptr->local_rank = p_info->local_rank;
+            ptr->node_rank = p_info->node_rank;
+            ptr->num_local_peers = p_info->num_local_peers;
+            ptr->pid = p_info->pid;
+            ptr->ts = p_info->ts;
 
-        munmap(ptr, SIZE);
+            munmap(ptr, SIZE);
+        //}
+        //else {
+        //    printf("Err: failed ftruncate() shm: %s\n", info_shm);
+        //}
         close(shm_fd);
     } else {
         printf("Err: failed writing task info to shm\n");
@@ -564,14 +650,15 @@ void print_pairs() {
 }
 
 int ser_core_to_node(int core_id) {
-    printf("** ser_core: %d\n", core_id);
-    int div = core_id / n_cores_per_node;
+    //printf("** ser_core: %d\n", core_id);
+    //int div = core_id / n_cores_per_node;
     /*
     int mod = core_id % n_cores_per_node;
     if (mod > 0) {
         div++;
     }*/
-    return (div);
+    //return (div);
+    return core_id / n_cores_per_node;
 }
 
 int node_core_to_ser(int node_id, int core_id) {
@@ -579,7 +666,8 @@ int node_core_to_ser(int node_id, int core_id) {
 }
 
 void get_numa_cpus() {
-    int i, j, k, c, err;
+    int i, k, c, err;
+    unsigned j;
     struct bitmask *cpus;
     
     c = 0;
@@ -607,7 +695,8 @@ void get_numa_cpus() {
 }
 
 void print_numa_node_cpus(int node) {
-    int i, err;
+    int err;
+    unsigned i;
     struct bitmask *cpus;
 
     cpus = numa_allocate_cpumask();
@@ -651,7 +740,8 @@ int map_to_next_core(int node_id, int task_id) {
 }
 
 void map_deloc() {
-    int i, n_mapped, mult;
+    int i, n_mapped;
+    // int mult;
     node_core_start = (int *) malloc(num_nodes * sizeof (int));
     for (i = 0; i < num_nodes; i++) {
         node_core_start[i] = 0;
@@ -661,7 +751,7 @@ void map_deloc() {
         is_mapped[i] = false;
     }
 
-    printf("* Running DeLoc mapping.. \n");
+    printf("* Run DeLoc mapping.. \n");
     n_mapped = 0;
     qsort(pairs, npairs, sizeof (struct pair), compare_pair);
     //mult = 0;
@@ -672,8 +762,8 @@ void map_deloc() {
         //int curr_node = mult % num_nodes;
         //int t1_node = curr_node;
         int t1_node = i % num_nodes;
-        printf("** curr_node=%d, curr_pair: %d-%d (%ld)\n", t1_node, p.t1,
-                p.t2, p.ncomm);
+        //printf("** curr_node=%d, curr_pair: %d-%d (%ld)\n", t1_node, p.t1,
+        //        p.t2, p.ncomm);
 
         if (!is_mapped[p.t1]) {
             t1_node = map_to_next_core(t1_node, p.t1);
@@ -684,7 +774,7 @@ void map_deloc() {
         } else {
             // Mapped before
             t1_node = ser_core_to_node(task_core[p.t1]);
-            printf("T1 mapped before to: %d\n", t1_node);
+            //printf("T1 mapped before to: %d\n", t1_node);
         }
         if (!is_mapped[p.t2]) {
             t1_node = map_to_next_core(t1_node, p.t2);
@@ -693,12 +783,11 @@ void map_deloc() {
                 is_mapped[p.t2] = true;
             }
         }
-
         //mult++;
         i++;
     }
-    print_node_cpus();
-    print_task_core();
+    //print_node_cpus();
+    //print_task_core();
 }
 
 void map_deloc_tl() {
