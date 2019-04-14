@@ -100,6 +100,8 @@ int *task_core;
 int num_tasks, n_cores_per_node;
 struct loadObj *node_loads;
 struct loadObj *task_loads;
+// logical sequential => physical core ids
+int *numa_cores;
 
 OMPI_DECLSPEC int map_to_next_core(int node_id, int task_id);
 OMPI_DECLSPEC void map_deloc();
@@ -115,6 +117,10 @@ OMPI_DECLSPEC int free_cpu(int node_id);
 OMPI_DECLSPEC int next_node(int node_id);
 OMPI_DECLSPEC void reset_node_core_start();
 OMPI_DECLSPEC void print_node_cpus();
+OMPI_DECLSPEC void print_numa_node_cpus(int node);
+OMPI_DECLSPEC void print_task_core();
+OMPI_DECLSPEC void print_pairs();
+OMPI_DECLSPEC void get_numa_cpus();
 OMPI_DECLSPEC int ser_core_to_node(int core_id);
 OMPI_DECLSPEC int node_core_to_ser(int node_id, int core_id);
 

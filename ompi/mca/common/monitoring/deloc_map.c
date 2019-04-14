@@ -16,6 +16,8 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <asm-generic/mman-common.h>
+#include <numa.h>
+#include <numaif.h>
 #include "deloc_map.h"
 #include "map.h"
 #include "deloc_metis.h"
@@ -73,6 +75,7 @@ void * monitor_exec(void *args) {
                     shmem_comm[i][j] = 0;
                 }
             }*/
+            // Update comm. matrix
             //get_commmat_shm(pInfo->shm_name, shmem_comm, nprocs_world);
             get_all_commmat_shm();
             printf("** comm_mat[]:\n\t");
@@ -86,6 +89,11 @@ void * monitor_exec(void *args) {
                 printf("\n\t");
             }
             printf("\n");
+            // Update task loads
+            comm_mat_to_task_loads(comm_mat, task_loads);
+            for (int i = 0; i < num_tasks; i++) {
+                printf("\tTask-%d, load=%ld\n", task_loads[i].id, task_loads[i].load);
+            }
 
             // Do Mapping
             map_deloc();
@@ -174,6 +182,20 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         for (int i = 0; i < num_nodes; i++) {
             node_cpus[i] = (int *) malloc(n_cores_per_node * sizeof (int));
         }
+        // Print node CPU using numactl
+        //int num_numa_cores = numa_num_configured_cpus();
+        numa_cores = (int *) malloc (num_cores * sizeof(int));
+        get_numa_cpus();
+        printf("[NUMACTL] Physical core IDs:\n");
+        for (int i = 0; i < num_cores; i++) {
+            printf(" %d", numa_cores[i]);
+        }
+        putchar('\n');
+        /*
+        for (int i = 0; i < num_nodes; i++) {
+            print_numa_node_cpus(i);
+        }
+        */
         // Task to core id mapping with flat and sequential numbering
         task_core = (int *) malloc(num_cores * sizeof (int));
         for (int i = 0; i < num_cores; i++) {
@@ -185,11 +207,14 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
             task_loads[i].id = i;
             task_loads[i].load = 0;
         }
+        
+        /*
         comm_mat_to_task_loads(comm_mat, task_loads);
         //qsort(task_loads, num_tasks, sizeof (struct loadObj), compare_loadObj_rev);
         for (int i = 0; i < num_tasks; i++) {
-            printf("\tTask-%d: %ld\n", task_loads[i].id, task_loads[i].load);
+            printf("\tTask-%d, load=%ld\n", task_loads[i].id, task_loads[i].load);
         }
+        */
     }
     stopDelocMon = false;
     pollInterval = 5;
@@ -405,6 +430,7 @@ void get_all_commmat_shm() {
         }
     }
     comm_mat_to_pairs(comm_mat, pairs);
+    //print_pairs();
 }
 
 void get_all_task_shm() {
@@ -519,8 +545,21 @@ void reset_node_core_start() {
 void print_node_cpus() {
     for (int i = 0; i < num_nodes; i++) {
         for (int j = 0; j < n_cores_per_node; j++) {
-            printf("Node-%d, core-%d -> task-%d\n", i, j, node_cpus[i][j]);
+            printf("\tNode-%d, core-%d -> task-%d\n", i, j, node_cpus[i][j]);
         }
+    }
+}
+
+void print_task_core() {
+    for (int i = 0; i < num_tasks; i++) {
+        printf("\tTask-%d => core-%d\n", i, task_core[i]);
+    }
+}
+
+void print_pairs() {
+    printf("Number of process pairs: %d\n", npairs);
+    for (int i = 0; i < npairs; i++) {
+        printf("\t%d-%d: %zu ", pairs[i].t1, pairs[i].t2, pairs[i].ncomm);
     }
 }
 
@@ -539,6 +578,50 @@ int node_core_to_ser(int node_id, int core_id) {
     return (node_id * n_cores_per_node) +core_id;
 }
 
+void get_numa_cpus() {
+    int i, j, k, c, err;
+    struct bitmask *cpus;
+    
+    c = 0;
+    for (i = 0; i < num_nodes; i++) {
+        cpus = numa_allocate_cpumask();
+        err = numa_node_to_cpus(i, cpus);
+        if (err >= 0) {
+            k = j = 0;
+            while (j < cpus->size && k < n_cores_per_node) {
+                if (numa_bitmask_isbitset(cpus, j)) {
+                    numa_cores[c++] = j;
+                    k++;
+                }
+                j++;
+            }
+            /*
+            for (j = 0; j < cpus->size; j++) {
+                if (numa_bitmask_isbitset(cpus, j)) {
+                    numa_cores[c++] = j;
+                }
+            }
+            */
+        }
+    }
+}
+
+void print_numa_node_cpus(int node) {
+    int i, err;
+    struct bitmask *cpus;
+
+    cpus = numa_allocate_cpumask();
+    err = numa_node_to_cpus(node, cpus);
+    if (err >= 0) {
+        for (i = 0; i < cpus->size; i++) {
+            if (numa_bitmask_isbitset(cpus, i)) {
+                printf(" %d", i);
+            }
+        }
+    }
+    putchar('\n');
+}
+
 int map_to_next_core(int node_id, int task_id) {
     int target_node = -1;
     int target_core = -1;
@@ -554,7 +637,7 @@ int map_to_next_core(int node_id, int task_id) {
             if (is_avail(cand_node)) {
                 target_node = cand_node;
                 target_core = node_core_start[target_node];
-                node_cpus[target_node][target_node] = task_id;
+                node_cpus[target_node][target_core] = task_id;
                 node_core_start[target_node]++;
             }
             tried++;
@@ -615,6 +698,7 @@ void map_deloc() {
         i++;
     }
     print_node_cpus();
+    print_task_core();
 }
 
 void map_deloc_tl() {
