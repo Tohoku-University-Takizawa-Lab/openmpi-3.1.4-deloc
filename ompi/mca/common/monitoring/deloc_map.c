@@ -152,7 +152,16 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     update_task_shm(pInfo);
     num_local_procs = pInfo->num_local_peers + 1;
     snprintf(pInfo->shm_name, 16, "DELOC-%d", pInfo->local_rank);
-    
+
+    // Set Polling interval (in us)    
+    const char* env_poll_itv = getenv("DELOC_POLL_INTERVAL");
+    if (env_poll_itv != NULL) {
+        pollInterval = atoi(env_poll_itv);
+        //printf("[DeLoc] Found poll interval envs: %d\n", pollInterval);
+    } else {
+        pollInterval = 5000000;
+    }
+
     // Initialize delta pml data
     //prev_pml_data = (size_t *) malloc(num_local_procs * sizeof (size_t));
     //for (i = 0; i < num_local_procs; i++) {
@@ -163,6 +172,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     if (pInfo->local_rank == 0) {
         // For rand()
         //srand(pInfo->pid);
+        printf("[DeLoc] Poll interval: %d (us)\n", pollInterval);
 
         // Initialize communication matrix
         comm_mat = (size_t **) malloc(num_local_procs * sizeof (size_t *));
@@ -250,7 +260,9 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     }
     stopDelocMon = false;
     // Poll interval in microseconds
-    pollInterval = 2000000;
+    
+    //pollInterval = 5000000;
+
 
     //    for (int i = 0; i < num_local_procs; i++) {
     //        for (int j = i; j < num_local_procs; j++) {
@@ -751,7 +763,7 @@ void map_deloc() {
         is_mapped[i] = false;
     }
 
-    printf("* Run DeLoc mapping.. \n");
+    //printf("* Run DeLoc mapping.. \n");
     n_mapped = 0;
     qsort(pairs, npairs, sizeof (struct pair), compare_pair);
     //mult = 0;
