@@ -46,7 +46,7 @@ libmca_common_monitoring_la_SOURCES = $(headers) $(sources)
 libmca_common_monitoring_la_CPPFLAGS = $(common_monitoring_CPPFLAGS)
 libmca_common_monitoring_la_LDFLAGS =  \
         -version-info $(libmca_ompi_common_monitoring_so_version) \
-        $(common_monitoring_LDFLAGS) -lmetis
+        $(common_monitoring_LDFLAGS) -lmetis -lnuma
 libmca_common_monitoring_la_LIBADD = $(common_monitoring_LIBS)
 libmca_common_monitoring_noinst_la_SOURCES = $(headers) $(sources)
 
