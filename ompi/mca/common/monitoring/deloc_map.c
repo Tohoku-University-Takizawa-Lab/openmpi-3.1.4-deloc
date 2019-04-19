@@ -29,9 +29,10 @@ int compare_pair(const void * a, const void * b) {
 }
 
 void * monitor_exec(void *args) {
-    int i;//, j;
+    int i, n_poll;//, j;
+    n_poll = 0;
     size_t *pml_data = (size_t *) args;
-    while (!stopDelocMon) {
+    while (!stopDelocMon && n_poll < pollNMax) {
         usleep(pollInterval);
         pollInterval *= 2;
         /*
@@ -79,15 +80,20 @@ void * monitor_exec(void *args) {
             putchar('\n');
             */
             // Update task loads, required by DeLocTL
+            
+            //comm_mat_to_task_loads(comm_mat, task_loads);
             /*
-            comm_mat_to_task_loads(comm_mat, task_loads);
             for (int i = 0; i < num_tasks; i++) {
                 printf("\tTask-%d, load=%ld\n", task_loads[i].id, task_loads[i].load);
             }
             */
 
             // Do Mapping
-            map_deloc();
+            //comm_mat_to_pairs(comm_mat, pairs);
+            //map_deloc();
+            //comm_mat_to_task_loads(comm_mat, task_loads);
+            //map_deloc_tl();
+            map_balance();
             // Enforce the mapping
             if (num_pids < num_tasks) {
                 get_all_task_shm();
@@ -140,6 +146,7 @@ void * monitor_exec(void *args) {
             printf("\n");
              */
         }
+        n_poll++;
     }
     pthread_exit(NULL);
     //return NULL;
@@ -147,6 +154,15 @@ void * monitor_exec(void *args) {
 
 void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     int i, j;
+
+    const char* env_deloc_enable = getenv("DELOC_ENABLED");
+    if (env_deloc_enable != NULL && atoi(env_deloc_enable) == 0) {
+        deloc_enabled = 0;
+        return; 
+    }
+    
+    deloc_enabled = 1;
+
     pInfo = (struct info *) malloc(sizeof (struct info));
     get_proc_info(orte_proc_info);
     update_task_shm(pInfo);
@@ -155,13 +171,16 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
 
     // Set Polling interval (in us)    
     const char* env_poll_itv = getenv("DELOC_POLL_INTERVAL");
+    const char* env_poll_max = getenv("DELOC_POLL_MAX");
     if (env_poll_itv != NULL) {
         pollInterval = atoi(env_poll_itv);
+        pollNMax = atoi(env_poll_max);
         //printf("[DeLoc] Found poll interval envs: %d\n", pollInterval);
     } else {
         pollInterval = 5000000;
+        pollNMax = 1;
     }
-
+    
     // Initialize delta pml data
     //prev_pml_data = (size_t *) malloc(num_local_procs * sizeof (size_t));
     //for (i = 0; i < num_local_procs; i++) {
@@ -243,12 +262,21 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         for (int i = 0; i < num_cores; i++) {
             task_core[i] = -1;
         }
+        node_core_start = (int *) malloc(num_nodes * sizeof (int));
 
+        // DeLocTL and Balance use the datas below
         task_loads = (struct loadObj *) malloc(num_tasks * sizeof (struct loadObj));
         for (int i = 0; i < num_tasks; i++) {
             task_loads[i].id = i;
             task_loads[i].load = 0;
         }
+        node_loads = (struct loadObj*) malloc(num_nodes * sizeof (struct loadObj));
+        for (i = 0; i < num_nodes; i++) {
+            node_loads[i].id = i;
+            //node_loads[n].load = 0;
+        }
+
+    
         
         /*
         comm_mat_to_task_loads(comm_mat, task_loads);
@@ -286,25 +314,27 @@ void reset_comm_mat() {
 
 void stop_deloc() {
     char info_shm[24];
-    stopDelocMon = true;
-    del_shm(pInfo->shm_name);
-    snprintf(info_shm, 16, "DELOC-info-%d", pInfo->local_rank);
-    del_shm(info_shm);
-    free(pInfo);
+    if (deloc_enabled == 1) {
+        stopDelocMon = true;
+        del_shm(pInfo->shm_name);
+        snprintf(info_shm, 16, "DELOC-info-%d", pInfo->local_rank);
+        del_shm(info_shm);
+        free(pInfo);
 
     //free(prev_pml_data);
-    if (pInfo->local_rank == 0) {
-        free(comm_mat);
-        //free(prev_comm_mat);
-        free(node_cpus);
-        free(pairs);
-        free(node_core_start);
-        free(task_core);
-        free(task_pids);
+        if (pInfo->local_rank == 0) {
+            free(comm_mat);
+            //free(prev_comm_mat);
+            free(node_cpus);
+            free(pairs);
+            free(node_core_start);
+            free(task_core);
+            free(task_pids);
         //map_deinit(&proc_pid_maps);
-    }
-    //printf("[DeLoc-%d] Monitoring stopped\n", pInfo->local_rank);
+        }
     
+    //printf("[DeLoc-%d] Monitoring stopped\n", pInfo->local_rank);
+    }
 }
 
 void get_proc_info(orte_proc_info_t orte_proc_info) {
@@ -500,7 +530,8 @@ void get_all_commmat_shm() {
         }
     }
     */
-    comm_mat_to_pairs(comm_mat, pairs);
+    //comm_mat_to_pairs(comm_mat, pairs);
+    //comm_mat_to_task_loads(comm_mat, task_loads);
     //print_pairs();
 }
 
@@ -640,6 +671,12 @@ void reset_node_core_start() {
     }
 }
 
+void reset_node_loads() {
+    for (int i = 0; i < num_nodes; i++) {
+        node_loads[i].load = 0;
+    }
+}
+
 void print_node_cpus() {
     for (int i = 0; i < num_nodes; i++) {
         for (int j = 0; j < n_cores_per_node; j++) {
@@ -754,10 +791,14 @@ int map_to_next_core(int node_id, int task_id) {
 void map_deloc() {
     int i, n_mapped;
     // int mult;
+    /*
     node_core_start = (int *) malloc(num_nodes * sizeof (int));
     for (i = 0; i < num_nodes; i++) {
         node_core_start[i] = 0;
     }
+    */
+    reset_node_core_start();
+
     bool is_mapped[num_tasks];
     for (i = 0; i < num_tasks; i++) {
         is_mapped[i] = false;
@@ -802,7 +843,7 @@ void map_deloc() {
     //print_task_core();
 }
 
-void map_deloc_tl() {
+void map_balance() {
     int t, n;
     /*
     node_core_start = (int *) malloc(num_nodes * sizeof (int));
@@ -812,21 +853,24 @@ void map_deloc_tl() {
     reset_node_core_start();
 
     // Reset node loads
+    /*
     node_loads = (struct loadObj*) malloc(num_nodes * sizeof (struct loadObj));
     for (n = 0; n < num_nodes; n++) {
         node_loads[n].id = n;
         node_loads[n].load = 0;
-    }
+    }*/
+    reset_node_loads();
 
-    printf("* Running DeLocTL mapping.. \n");
+    //printf("* Running Balance mapping.. \n");
     t = 0;
     //n = 0;
-    //qsort(task_loads, num_tasks, sizeof (struct loadObj), compare_loadObj_rev);
+    qsort(task_loads, num_tasks, sizeof (struct loadObj), compare_loadObj_rev);
     while (t < num_tasks) {
         n = node_loads[0].id;
-        int target_node = map_to_next_core(n, task_loads[t].id);
-        printf("** Least node=%d, Task-%d->Node-%d\n", n, task_loads[t].id,
-                target_node);
+        //int target_node = map_to_next_core(n, task_loads[t].id);
+        map_to_next_core(n, task_loads[t].id);
+        //printf("** Least node=%d, Task-%d->Node-%d\n", n, task_loads[t].id,
+        //        target_node);
         node_loads[0].load += task_loads[t].load;
         qsort(node_loads, num_nodes, sizeof (struct loadObj), compare_loadObj);
         //        for (int i = 0; i < num_nodes; i++) {
@@ -835,5 +879,52 @@ void map_deloc_tl() {
         t++;
     }
 
-    print_node_cpus();
+    //print_node_cpus();
+}
+
+void map_deloc_tl() {
+    int t, n, target_node;
+    size_t avg_load;
+    /*
+    node_core_start = (int *) malloc(num_nodes * sizeof (int));
+    for (n = 0; n < num_nodes; n++) {
+        node_core_start[n] = 0;
+    }*/
+    reset_node_core_start();
+
+    // Reset node loads
+    /*
+    node_loads = (struct loadObj*) malloc(num_nodes * sizeof (struct loadObj));
+    for (n = 0; n < num_nodes; n++) {
+        node_loads[n].id = n;
+        node_loads[n].load = 0;
+    }*/
+    reset_node_loads();
+    
+    avg_load = 0;
+    for (t = 0; t < num_tasks; t++) {
+        avg_load += task_loads[t].load;
+    }
+    avg_load = avg_load / num_nodes;
+
+    //printf("* Running DeLocTL mapping.. \n");
+    t = 0;
+    //n = 0;
+    qsort(task_loads, num_tasks, sizeof (struct loadObj), compare_loadObj_rev);
+    n = 0;
+    while (t < num_tasks) {
+        target_node = map_to_next_core(n, task_loads[t].id);
+        //printf("** Least node=%d, Task-%d->Node-%d\n", n, task_loads[t].id,
+        //        target_node);
+        node_loads[target_node].load += task_loads[t].load;
+        if (node_loads[n].load >= avg_load) {
+            n = next_node(n);
+        }
+        //qsort(node_loads, num_nodes, sizeof (struct loadObj), compare_loadObj);
+        //        for (int i = 0; i < num_nodes; i++) {
+        //            printf("** Node[%d]=%ld\n", node_loads[i].id, node_loads[i].load);
+        //        }
+        t++;
+    }
+    //print_node_cpus();
 }

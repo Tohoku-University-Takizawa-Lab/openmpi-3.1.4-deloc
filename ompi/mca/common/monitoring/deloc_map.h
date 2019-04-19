@@ -75,6 +75,8 @@ __pid_t *task_pids;
 
 // Polling interval in seconds
 int pollInterval;
+int pollNMax;
+unsigned deloc_enabled;
 
 OMPI_DECLSPEC void stop_deloc(void );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
@@ -110,6 +112,7 @@ int *numa_cores;
 OMPI_DECLSPEC int map_to_next_core(int node_id, int task_id);
 OMPI_DECLSPEC void map_deloc(void );
 OMPI_DECLSPEC void map_deloc_tl(void );
+OMPI_DECLSPEC void map_balance(void );
 OMPI_DECLSPEC int compare_pair(const void * a, const void * b);
 OMPI_DECLSPEC int compare_task(const void *a, const void *b);
 OMPI_DECLSPEC int compare_loadObj(const void *a, const void *b);
@@ -120,6 +123,7 @@ OMPI_DECLSPEC bool is_avail(int node_id);
 OMPI_DECLSPEC int free_cpu(int node_id);
 OMPI_DECLSPEC int next_node(int node_id);
 OMPI_DECLSPEC void reset_node_core_start(void );
+OMPI_DECLSPEC void reset_node_loads(void );
 OMPI_DECLSPEC void print_node_cpus(void );
 OMPI_DECLSPEC void print_numa_node_cpus(int node);
 OMPI_DECLSPEC void print_task_core(void );
