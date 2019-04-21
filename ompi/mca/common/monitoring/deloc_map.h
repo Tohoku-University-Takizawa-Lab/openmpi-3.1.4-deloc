@@ -79,6 +79,7 @@ __pid_t *task_pids;
 int pollInterval;
 int pollNMax;
 unsigned deloc_enabled;
+int n_comm_changed;
 
 OMPI_DECLSPEC void stop_deloc(void );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
@@ -109,6 +110,7 @@ int *task_core;
 int num_tasks, n_cores_per_node;
 struct loadObj *node_loads;
 struct loadObj *task_loads;
+struct loadObj *task_loads_prev;
 // logical sequential => physical core ids
 int *numa_cores;
 
@@ -135,6 +137,7 @@ OMPI_DECLSPEC void get_numa_cpus(void );
 OMPI_DECLSPEC int ser_core_to_node(int core_id);
 OMPI_DECLSPEC int node_core_to_ser(int node_id, int core_id);
 OMPI_DECLSPEC int compare_update_pairs(struct pair *p1, struct pair *p2, int n_p);
+OMPI_DECLSPEC int compare_update_task_loads(struct loadObj *l1, struct loadObj *l2, int n_l);
 
 END_C_DECLS
 
