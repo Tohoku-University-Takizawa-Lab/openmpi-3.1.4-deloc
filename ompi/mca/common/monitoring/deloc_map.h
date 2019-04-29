@@ -80,6 +80,9 @@ int pollInterval;
 int pollNMax;
 unsigned deloc_enabled;
 int n_comm_changed;
+//int master_rank;
+// Just pointer to the PML object
+size_t *pml_events;
 
 OMPI_DECLSPEC void stop_deloc(void );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
@@ -91,7 +94,7 @@ OMPI_DECLSPEC void del_shm(const char *shm_name);
 OMPI_DECLSPEC void update_commmat_shm(const char *shm_name, size_t *data, int np);
 OMPI_DECLSPEC void update_task_shm(struct info *task_info);
 OMPI_DECLSPEC void get_commmat_shm(const char *shm_name, size_t *to_data, int np);
-OMPI_DECLSPEC void get_all_commmat_shm(void );
+OMPI_DECLSPEC void get_all_commmat_shm(const int SIZE );
 OMPI_DECLSPEC void get_all_task_shm(void );
 OMPI_DECLSPEC void init_deloc(orte_proc_info_t orte_proc_info, size_t * pml_data);
 OMPI_DECLSPEC void reset_comm_mat(void );
@@ -113,11 +116,13 @@ struct loadObj *task_loads;
 struct loadObj *task_loads_prev;
 // logical sequential => physical core ids
 int *numa_cores;
+bool *is_mapped;
 
 OMPI_DECLSPEC int map_to_next_core(int node_id, int task_id);
 OMPI_DECLSPEC void map_deloc(void );
 OMPI_DECLSPEC void map_deloc_tl(void );
 OMPI_DECLSPEC void map_balance(void );
+OMPI_DECLSPEC void map_locality(void );
 OMPI_DECLSPEC int compare_pair(const void * a, const void * b);
 OMPI_DECLSPEC int compare_task(const void *a, const void *b);
 OMPI_DECLSPEC int compare_loadObj(const void *a, const void *b);
@@ -132,12 +137,15 @@ OMPI_DECLSPEC void reset_node_loads(void );
 OMPI_DECLSPEC void print_node_cpus(void );
 OMPI_DECLSPEC void print_numa_node_cpus(int node);
 OMPI_DECLSPEC void print_task_core(void );
+OMPI_DECLSPEC void print_task_loads(void );
+OMPI_DECLSPEC void print_comm_mat(size_t **comm_mat );
 OMPI_DECLSPEC void print_pairs(struct pair *pairs, int n_p);
 OMPI_DECLSPEC void get_numa_cpus(void );
 OMPI_DECLSPEC int ser_core_to_node(int core_id);
 OMPI_DECLSPEC int node_core_to_ser(int node_id, int core_id);
 OMPI_DECLSPEC int compare_update_pairs(struct pair *p1, struct pair *p2, int n_p);
 OMPI_DECLSPEC int compare_update_task_loads(struct loadObj *l1, struct loadObj *l2, int n_l);
+OMPI_DECLSPEC void save_comm_mat(int nbtasks);
 
 END_C_DECLS
 

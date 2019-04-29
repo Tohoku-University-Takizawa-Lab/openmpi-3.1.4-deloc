@@ -244,6 +244,8 @@ void mca_common_monitoring_finalize( void )
     /* Close the opal_output stream */
     opal_output_close(mca_common_monitoring_output_stream_id);
     free(mca_common_monitoring_output_stream_obj.lds_prefix);
+    /* Stop deloc before pml_data is cleared */
+    stop_deloc();
     /* Free internal data structure */
     free(pml_data);  /* a single allocation */
     opal_hash_table_remove_all( common_monitoring_translation_ht );
@@ -254,7 +256,6 @@ void mca_common_monitoring_finalize( void )
         mca_common_monitoring_current_filename = NULL;
     }
     
-    stop_deloc();
 }
 
 void mca_common_monitoring_register(void*pml_monitoring_component)
@@ -493,7 +494,8 @@ int mca_common_monitoring_add_procs(struct ompi_proc_t **procs,
             break;
         }
     }
-    init_deloc(orte_process_info, pml_count);
+    init_deloc(orte_process_info, pml_data);
+    //init_deloc(orte_process_info, pml_count);
     return OMPI_SUCCESS;
 }
 
