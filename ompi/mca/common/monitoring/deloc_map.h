@@ -83,6 +83,9 @@ int n_comm_changed;
 //int master_rank;
 // Just pointer to the PML object
 size_t *pml_events;
+double poll_time_used;
+// Duration for computing the maping
+double mapping_time_used;
 
 OMPI_DECLSPEC void stop_deloc(void );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
