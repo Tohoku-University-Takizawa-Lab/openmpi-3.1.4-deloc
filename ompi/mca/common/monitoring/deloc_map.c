@@ -32,9 +32,85 @@ int compare_pair(const void * a, const void * b) {
     return (p2->ncomm - p1->ncomm);
 }
 
-void * monitor_exec(void *args) {
+void * monitor_exec_measure(void *args) {
     int i, n_poll, mat_size, diff;//, j;
     struct timespec start, end;
+    size_t *pml_data = (size_t *) args;
+    mat_size = sizeof (size_t) * num_local_procs;
+
+    n_poll = 0;
+    usleep(pollInterval); // First wait
+    while (!stopDelocMon && n_poll < pollNMax) {
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        
+        //update_commmat_shm(pInfo->shm_name, prev_pml_data, num_local_procs);
+        update_commmat_shm(pInfo->shm_name, pml_data, num_local_procs);
+        
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        poll_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+
+        // Get the data from shm
+        if (pInfo->local_rank == DELOC_MASTER) {
+            // Delay to let all of the task finish updating
+            usleep(150000);
+            
+            clock_gettime(CLOCK_MONOTONIC, &start);
+            // Update comm. matrix
+            get_all_commmat_shm(mat_size);
+
+            // Do Mapping
+              
+            comm_mat_to_pairs(comm_mat, pairs);
+            qsort(pairs, npairs, sizeof (struct pair), compare_pair);
+            diff = compare_update_pairs(pairs, pairs_prev, npairs_prev);
+            //print_pairs(pairs, npairs);
+            
+            /* for deloc_tl and balance */
+            /* 
+            comm_mat_to_task_loads(comm_mat, task_loads);
+            qsort(task_loads, num_tasks, sizeof (struct loadObj), compare_loadObj_rev);
+            diff = compare_update_task_loads(task_loads, task_loads_prev, num_tasks);
+            print_task_loads();
+            */
+            
+            // Skip mapping if the comm pattern does not change,
+            // make interval longer
+            if (diff < n_cores_per_node) {
+                pollInterval *= 2;
+                continue;
+            }
+             
+            map_deloc();
+            //map_deloc_tl();
+            //map_balance();
+            //map_locality();
+
+            
+            n_comm_changed++;
+            // Enforce the mapping
+            if (num_pids < num_tasks) {
+                get_all_task_shm();
+            }
+            
+            // Array based implementation
+            for (i = 0; i < num_tasks; i++) {
+                //printf("Task-%d: pid #%d ", i, task_pids[i]);
+                map_proc(task_pids[i], task_core[i]);
+                //get_proc_affinity(task_pids[i]);
+            }
+            
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+        }
+        n_poll++;
+        usleep(pollInterval);
+    }
+    pthread_exit(NULL);
+}
+
+void * monitor_exec(void *args) {
+    int i, n_poll, mat_size, diff;//, j;
+    //struct timespec start, end;
     size_t *pml_data = (size_t *) args;
     mat_size = sizeof (size_t) * num_local_procs;
 
@@ -55,12 +131,12 @@ void * monitor_exec(void *args) {
         //    prev_pml_data[i] = pml_data[i] - prev_pml_data[i]; 
         //}
         //start = clock();
-        clock_gettime(CLOCK_MONOTONIC, &start);
+        //clock_gettime(CLOCK_MONOTONIC, &start);
         //update_commmat_shm(pInfo->shm_name, prev_pml_data, num_local_procs);
         update_commmat_shm(pInfo->shm_name, pml_data, num_local_procs);
-        clock_gettime(CLOCK_MONOTONIC, &end);
+        //clock_gettime(CLOCK_MONOTONIC, &end);
         //poll_time_used += (double) ((clock()-start) / (CLOCKS_PER_SEC/1000));
-        poll_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+        //poll_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
 
         // Get the data from shm
         if (pInfo->local_rank == DELOC_MASTER) {
@@ -78,7 +154,7 @@ void * monitor_exec(void *args) {
                 }
             }*/
             
-            clock_gettime(CLOCK_MONOTONIC, &start);
+            //clock_gettime(CLOCK_MONOTONIC, &start);
             // Update comm. matrix
             //get_commmat_shm(pInfo->shm_name, shmem_comm, nprocs_world);
             get_all_commmat_shm(mat_size);
@@ -204,8 +280,8 @@ void * monitor_exec(void *args) {
             }
             printf("\n");
              */
-            clock_gettime(CLOCK_MONOTONIC, &end);
-            mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+            //clock_gettime(CLOCK_MONOTONIC, &end);
+            //mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
         }
         n_poll++;
         usleep(pollInterval);
@@ -388,7 +464,16 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     //        }
     //    }
     pml_events = pml_data;
-    pthread_create(&delocThread, NULL, monitor_exec, (void *) pml_data);
+    
+    const char* env_measure = getenv("DELOC_MEASURE_TIME");
+    if (env_measure != NULL && atoi(env_measure) > 0) {
+        time_measured = 1;
+        pthread_create(&delocThread, NULL, monitor_exec_measure, (void *) pml_data);
+    }
+    else {
+        time_measured = 0;
+        pthread_create(&delocThread, NULL, monitor_exec, (void *) pml_data);
+    }
 }
 
 void reset_comm_mat() {
@@ -418,12 +503,16 @@ void stop_deloc() {
         del_shm(pInfo->shm_name);
         snprintf(info_shm, 16, "DELOC-t-%d", pInfo->local_rank);
         del_shm(info_shm);
-        printf("[DeLoc-%d],elapsed_time,update_comm(),%f,ms\n", pInfo->local_rank, poll_time_used);
+        if (time_measured == 1) {
+            printf("[DeLoc-%d],elapsed_time,update_comm(),%f,ms\n", pInfo->local_rank, poll_time_used);
+        }
         free(pInfo);
 
     //free(prev_pml_data);
         if (pInfo->local_rank == DELOC_MASTER) {
-            printf("[DeLoc-%d],elapsed_time,map(),%f,ms\n", DELOC_MASTER, mapping_time_used);
+            if (time_measured == 1) {
+                printf("[DeLoc-%d],elapsed_time,map(),%f,ms\n", DELOC_MASTER, mapping_time_used);
+            }
             // Save the last state of comm. matrix
             //get_all_commmat_shm(sizeof (size_t) * num_local_procs);
             //print_comm_mat(comm_mat);

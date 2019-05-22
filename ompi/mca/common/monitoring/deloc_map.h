@@ -79,6 +79,7 @@ __pid_t *task_pids;
 int pollInterval;
 int pollNMax;
 unsigned deloc_enabled;
+unsigned time_measured;
 int n_comm_changed;
 //int master_rank;
 // Just pointer to the PML object
@@ -105,6 +106,7 @@ OMPI_DECLSPEC void reset_prev_comm_mat(void );
 OMPI_DECLSPEC void comm_mat_to_pairs(size_t **mat, struct pair *pairs);
 OMPI_DECLSPEC void get_proc_affinity(__pid_t pid);
 void *monitor_exec(void *args);
+void *monitor_exec_measure(void *args);
 
 // DeLocMap
 //int num_tasks, num_nodes, num_cores, n_cores_per_node;
