@@ -70,6 +70,10 @@ struct pair *pairs_prev;
 struct d_task *d_tasks;
 int npairs;
 int npairs_prev;
+int ntasks_prev;
+float pairs_equal_ratio;
+int diff_lim;
+int tasks_diff_lim;
 pid_map_t proc_pid_maps;
 unsigned *cur_mapping;
 int num_pids;
@@ -78,15 +82,18 @@ __pid_t *task_pids;
 // Polling interval in seconds
 int pollInterval;
 int pollNMax;
+float slope_m, slope_n;
 unsigned deloc_enabled;
 unsigned time_measured;
 int n_comm_changed;
 //int master_rank;
 // Just pointer to the PML object
-size_t *pml_events;
+//size_t *pml_events;
 double poll_time_used;
 // Duration for computing the maping
 double mapping_time_used;
+// Flag to monitor thread
+bool is_thread_running;
 
 OMPI_DECLSPEC void stop_deloc(void );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
@@ -119,6 +126,8 @@ int num_tasks, n_cores_per_node;
 struct loadObj *node_loads;
 struct loadObj *task_loads;
 struct loadObj *task_loads_prev;
+struct loadObj *task_loads_cmp;
+int ntasks_cmp; 
 // logical sequential => physical core ids
 int *numa_cores;
 bool *is_mapped;
@@ -132,8 +141,10 @@ OMPI_DECLSPEC int compare_pair(const void * a, const void * b);
 OMPI_DECLSPEC int compare_task(const void *a, const void *b);
 OMPI_DECLSPEC int compare_loadObj(const void *a, const void *b);
 OMPI_DECLSPEC int compare_loadObj_rev(const void *a, const void *b);
+OMPI_DECLSPEC int compare_loadObj_id(const void *a, const void *b);
 OMPI_DECLSPEC void comm_mat_to_pairs(size_t **mat, struct pair *pairs);
 OMPI_DECLSPEC void comm_mat_to_task_loads(size_t **mat, struct loadObj *task_loads);
+OMPI_DECLSPEC void comm_mat_to_pairs_tasks(size_t **mat, struct pair *pairs, struct loadObj *task_loads);
 OMPI_DECLSPEC bool is_avail(int node_id);
 OMPI_DECLSPEC int free_cpu(int node_id);
 OMPI_DECLSPEC int next_node(int node_id);
@@ -150,7 +161,12 @@ OMPI_DECLSPEC int ser_core_to_node(int core_id);
 OMPI_DECLSPEC int node_core_to_ser(int node_id, int core_id);
 OMPI_DECLSPEC int compare_update_pairs(struct pair *p1, struct pair *p2, int n_p);
 OMPI_DECLSPEC int compare_update_task_loads(struct loadObj *l1, struct loadObj *l2, int n_l);
+OMPI_DECLSPEC int compare_update_task_most(struct loadObj *cur, struct loadObj *prev, int n_t, int n_changed);
 OMPI_DECLSPEC void save_comm_mat(int nbtasks);
+OMPI_DECLSPEC void save_comm_mat_part(int nbtasks, int part);
+OMPI_DECLSPEC void save_comm_mat_to_file(int nbtasks, const char* out_filename);
+OMPI_DECLSPEC void delay_poll(int pollInterval);
+OMPI_DECLSPEC void free_mem_master(void );
 
 END_C_DECLS
 

@@ -5,6 +5,7 @@
  */
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <sched.h>
 #include "opal/mca/base/mca_base_var.h"
@@ -25,6 +26,9 @@
 #define DELOC_MASTER 0
 #define DELOC_COMM_FILE "deloc.comm.csv"
 //#define master_rank 7
+#define MASTER_DELAY 500000
+#define DELAY_STEP 500000
+#define INTERVAL_MAX 4000000
 
 int compare_pair(const void * a, const void * b) {
     struct pair *p1 = (struct pair *) a;
@@ -33,13 +37,15 @@ int compare_pair(const void * a, const void * b) {
 }
 
 void * monitor_exec_measure(void *args) {
-    int i, n_poll, mat_size, diff;//, j;
+    int i, n_poll, mat_size, diff;//, diff2;//, j;
     struct timespec start, end;
     size_t *pml_data = (size_t *) args;
     mat_size = sizeof (size_t) * num_local_procs;
 
     n_poll = 0;
-    usleep(pollInterval); // First wait
+    is_thread_running = true;
+    delay_poll(pollInterval); // First wait
+    //usleep(pollInterval); // First wait
     while (!stopDelocMon && n_poll < pollNMax) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         
@@ -52,7 +58,8 @@ void * monitor_exec_measure(void *args) {
         // Get the data from shm
         if (pInfo->local_rank == DELOC_MASTER) {
             // Delay to let all of the task finish updating
-            usleep(150000);
+            //usleep(150000);
+            usleep(MASTER_DELAY);
             
             clock_gettime(CLOCK_MONOTONIC, &start);
             // Update comm. matrix
@@ -60,9 +67,15 @@ void * monitor_exec_measure(void *args) {
 
             // Do Mapping
               
-            comm_mat_to_pairs(comm_mat, pairs);
+            //comm_mat_to_pairs(comm_mat, pairs);
+            comm_mat_to_pairs_tasks(comm_mat, pairs, task_loads);
             qsort(pairs, npairs, sizeof (struct pair), compare_pair);
-            diff = compare_update_pairs(pairs, pairs_prev, npairs_prev);
+            //printf("Compare update task most..\n");
+            diff = compare_update_task_most(task_loads, task_loads_prev, num_tasks, n_comm_changed);
+            //comm_mat_to_pairs_tasks(comm_mat, pairs, task_loads);
+            //qsort(pairs, npairs, sizeof (struct pair), compare_pair);
+            //diff = compare_update_pairs(pairs, pairs_prev, npairs_prev);
+            //diff2 = compare_update_task_most(task_loads, task_loads_prev, num_tasks);
             //print_pairs(pairs, npairs);
             
             /* for deloc_tl and balance */
@@ -75,47 +88,68 @@ void * monitor_exec_measure(void *args) {
             
             // Skip mapping if the comm pattern does not change,
             // make interval longer
-            if (diff < n_cores_per_node) {
-                pollInterval *= 2;
-                continue;
+            //printf("[DeLoc] diff1=%d, diff2=%d\n", diff, diff2);
+            //if (diff < n_cores_per_node) {
+            if (diff < tasks_diff_lim && pollInterval < INTERVAL_MAX) {
+                //if (pollInterval < INTERVAL_MAX){
+                pollInterval *= slope_m;
+                //}
             }
+            else {
              
-            map_deloc();
-            //map_deloc_tl();
-            //map_balance();
-            //map_locality();
-
+                //pollInterval *= slope_n;
+                map_deloc();
+                //map_deloc_tl();
+                //map_balance();
+                //map_locality();
             
-            n_comm_changed++;
-            // Enforce the mapping
-            if (num_pids < num_tasks) {
-                get_all_task_shm();
+                // Enforce the mapping
+                if (num_pids < num_tasks) {
+                    get_all_task_shm();
+                }
+                // Array based implementation
+                for (i = 0; i < num_tasks; i++) {
+                    //printf("Task-%d: pid #%d ", i, task_pids[i]);
+                    map_proc(task_pids[i], task_core[i]);
+                    //get_proc_affinity(task_pids[i]);
+                }
+            
+                clock_gettime(CLOCK_MONOTONIC, &end);
+                mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+                n_comm_changed++;
+                save_comm_mat_part(num_tasks, n_poll);
             }
-            
-            // Array based implementation
-            for (i = 0; i < num_tasks; i++) {
-                //printf("Task-%d: pid #%d ", i, task_pids[i]);
-                map_proc(task_pids[i], task_core[i]);
-                //get_proc_affinity(task_pids[i]);
-            }
-            
-            clock_gettime(CLOCK_MONOTONIC, &end);
-            mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
         }
         n_poll++;
-        usleep(pollInterval);
+        delay_poll(pollInterval);
+        //usleep(pollInterval);
     }
+    is_thread_running = false;
     pthread_exit(NULL);
 }
 
+void delay_poll(int pollInterval) {
+    // every 100 ms
+    //int step = 100000;  //in us
+    int i;
+    for (i = pollInterval; i >= DELAY_STEP; i -= DELAY_STEP) {
+        usleep(DELAY_STEP);
+    }
+    if (i > 0) {
+        usleep(i);
+    }
+}
+
 void * monitor_exec(void *args) {
-    int i, n_poll, mat_size, diff;//, j;
-    //struct timespec start, end;
+    int i, n_poll, mat_size, diff;//, diff2;//, j;
+    //struct timespec req = {0};
     size_t *pml_data = (size_t *) args;
     mat_size = sizeof (size_t) * num_local_procs;
 
     n_poll = 0;
-    usleep(pollInterval); // First wait
+    is_thread_running = true;
+    //usleep(pollInterval); // First wait
+    delay_poll(pollInterval); // First wait
     while (!stopDelocMon && n_poll < pollNMax) {
         //usleep(pollInterval);
        // pollInterval *= 2;
@@ -141,7 +175,9 @@ void * monitor_exec(void *args) {
         // Get the data from shm
         if (pInfo->local_rank == DELOC_MASTER) {
             // Delay to let all of the task finish updating
-            usleep(150000);
+            //usleep(150000);
+            //usleep(1000000);
+            usleep(MASTER_DELAY);
             //size_t **shmem_comm = (size_t*) malloc(sizeof(size_t) * nprocs_world);
             //size_t shmem_comm[nprocs_world][nprocs_world];
             /*size_t **shmem_comm = (size_t **)malloc(nprocs_world * sizeof(size_t *)); 
@@ -157,6 +193,7 @@ void * monitor_exec(void *args) {
             //clock_gettime(CLOCK_MONOTONIC, &start);
             // Update comm. matrix
             //get_commmat_shm(pInfo->shm_name, shmem_comm, nprocs_world);
+            //printf("Get all commat from shm..\n");
             get_all_commmat_shm(mat_size);
             /*for (int i = 0 ; i < nprocs_world ; i++) {
                 printf("%d ", (unsigned int) shmem_comm[i]);
@@ -182,9 +219,12 @@ void * monitor_exec(void *args) {
 
             // Do Mapping
               
-            comm_mat_to_pairs(comm_mat, pairs);
+            //comm_mat_to_pairs(comm_mat, pairs);
+            comm_mat_to_pairs_tasks(comm_mat, pairs, task_loads);
             qsort(pairs, npairs, sizeof (struct pair), compare_pair);
-            diff = compare_update_pairs(pairs, pairs_prev, npairs_prev);
+            //diff = compare_update_pairs(pairs, pairs_prev, npairs_prev);
+            //printf("Compare update task most..\n");
+            diff = compare_update_task_most(task_loads, task_loads_prev, num_tasks, n_comm_changed);
             //print_pairs(pairs, npairs);
             
             // Update previous pairs
@@ -211,22 +251,31 @@ void * monitor_exec(void *args) {
             diff = compare_update_task_loads(task_loads, task_loads_prev, num_tasks);
             print_task_loads();
             */
-            if (diff < n_cores_per_node) {
+            //printf("[DeLoc] diff1=%d, diff2=%d\n", diff, diff2);
+            //printf("[DeLoc] diff=%d, lim=%d\n", diff, diff_lim);
+            //if (diff < n_cores_per_node) {
+            if (diff < tasks_diff_lim) {
                 //printf("** Comm. does not change, skipped mapping\n");
                 //print_pairs(pairs,npairs);
                 //print_pairs(pairs_prev,npairs_prev);
 
-                pollInterval *= 2;
-                continue;
+                // Slowage the polling
+                //printf("\tCurrent PollInterval: %d us\n", pollInterval);
+                if (pollInterval < INTERVAL_MAX){
+                    pollInterval *= slope_m;
+                }
+                //pollInterval *= slope_m;
+                //continue;
             }
+            else {
              
+            //pollInterval *= slope_n;
             map_deloc();
             //map_deloc_tl();
             //map_balance();
             //map_locality();
 
             
-            n_comm_changed++;
             // Enforce the mapping
             if (num_pids < num_tasks) {
                 get_all_task_shm();
@@ -282,10 +331,20 @@ void * monitor_exec(void *args) {
              */
             //clock_gettime(CLOCK_MONOTONIC, &end);
             //mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+            n_comm_changed++;
+            }
         }
         n_poll++;
-        usleep(pollInterval);
+        //usleep(pollInterval);
+        //usleep(pollInterval); // First wait
+        //printf("\tCurrent PollInterval: %d ms\n", pollInterval);
+        delay_poll(pollInterval);
+        //req.tv_sec = 0;
+        //req.tv_nsec = pollInterval * 1000000L;
+        //nanosleep(&req, (struct timespec *) NULL); // First wait
     }
+    is_thread_running = false;
+    //free_mem_master();
     pthread_exit(NULL);
     //return NULL;
 }
@@ -320,6 +379,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     else {
         // Default interval is 2 s
         pollInterval = 2000000;
+        //pollInterval = 2000;
     }
     if (env_poll_max != NULL) {
         pollNMax = atoi(env_poll_max);
@@ -339,6 +399,28 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         // For rand()
         //srand(pInfo->pid);
         printf("[DeLoc] Poll interval: %d (us), max_count: %d\n", pollInterval, pollNMax);
+        //printf("[DeLoc] Application name: %s\n",  ORTE_APP_CONTEXT->app);
+
+        // Load settings from the environment
+        const char* env_pairs_equal = getenv("DELOC_PAIRS_EQ_RATIO");
+        if (env_pairs_equal != NULL) {
+            pairs_equal_ratio = atof(env_pairs_equal);   
+        }
+        else {
+            pairs_equal_ratio = 0.5;
+        }
+        const char* env_slope_m = getenv("DELOC_SLOPE_M");
+        const char* env_slope_n = getenv("DELOC_SLOPE_N");
+        if (env_slope_m != NULL && env_slope_n != NULL) {
+            slope_m = atof(env_slope_m);
+            slope_n = atof(env_slope_n);
+        }
+        else {
+            //slope_m = slope_n = 2;
+            //slope_m = slope_n = 1.5;
+            slope_m = 1.5;
+            slope_n = 0.7;
+        }
 
         // Initialize communication matrix
         comm_mat = (size_t **) malloc(num_local_procs * sizeof (size_t *));
@@ -363,21 +445,28 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         hwloc_topology_load(hw_topo);
         num_cores = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_CORE);
         int num_pus = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_PU);
-        num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_PACKAGE);
+        //num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_PACKAGE);
+        //num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_NUMANODE);
+        num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_GROUP);
         printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n", num_nodes,
                 num_pus, num_cores, num_pus/num_nodes);
 
         //d_tasks = (struct d_task *) malloc(num_local_procs * sizeof (struct d_task));
-        npairs = num_local_procs * (num_local_procs - 1) / 2;
         num_tasks = num_local_procs;
+        npairs = num_tasks * (num_tasks - 1) / 2;
         pairs = (struct pair *) malloc(npairs * sizeof (struct pair));
         for (i = 0; i < npairs; i++) {
             pairs[i].ncomm = 0;
         }
         printf("[DeLoc] Number of tasks=%d, number of pairs=%d\n", num_tasks, npairs);
 
-        npairs_prev = num_tasks/2;
+        //npairs_prev = num_tasks * pairs_equal_ratio;
+        npairs_prev = num_tasks * 1.4;  // diagonal
+        diff_lim = npairs_prev * pairs_equal_ratio;
         pairs_prev = (struct pair *) malloc(npairs_prev * sizeof (struct pair));
+        ntasks_prev = num_tasks * 0.5;
+        tasks_diff_lim = ntasks_prev * (1-pairs_equal_ratio);
+        ntasks_cmp = ntasks_prev * 2;
 
         // Use physical core if possible
         if (num_tasks > num_cores && num_tasks <= num_pus) {
@@ -428,12 +517,13 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
 
         // DeLocTL and Balance use the datas below
         task_loads = (struct loadObj *) malloc(num_tasks * sizeof (struct loadObj));
-        task_loads_prev = (struct loadObj *) malloc(num_tasks * sizeof (struct loadObj));
-        /*
-        for (int i = 0; i < num_tasks; i++) {
-            task_loads[i].id = i;
-            task_loads[i].load = 0;
-        }*/
+        task_loads_prev = (struct loadObj *) malloc(ntasks_prev * sizeof (struct loadObj));
+        task_loads_cmp = (struct loadObj *) malloc(ntasks_cmp * sizeof (struct loadObj));
+         
+        for (int i = 0; i < ntasks_prev; i++) {
+            task_loads_prev[i].id = i;
+            task_loads_prev[i].load = 0;
+        }
         node_loads = (struct loadObj*) malloc(num_nodes * sizeof (struct loadObj));
         for (i = 0; i < num_nodes; i++) {
             node_loads[i].id = i;
@@ -463,7 +553,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     //            pairs[j]->szcomm = 0;
     //        }
     //    }
-    pml_events = pml_data;
+    //pml_events = pml_data;
     
     const char* env_measure = getenv("DELOC_MEASURE_TIME");
     if (env_measure != NULL && atoi(env_measure) > 0) {
@@ -499,6 +589,11 @@ void stop_deloc() {
         stopDelocMon = true;
         // Update the last state of comm. matrix
         //update_commmat_shm(pInfo->shm_name, pml_events, num_local_procs);
+        while (is_thread_running == true) {
+            // wait for all thread finished
+            //printf("Still running..\n");
+            sleep(1);
+        }
 
         del_shm(pInfo->shm_name);
         snprintf(info_shm, 16, "DELOC-t-%d", pInfo->local_rank);
@@ -506,8 +601,8 @@ void stop_deloc() {
         if (time_measured == 1) {
             printf("[DeLoc-%d],elapsed_time,update_comm(),%f,ms\n", pInfo->local_rank, poll_time_used);
         }
-        free(pInfo);
 
+         //printf("[DeLoc-%d] Cleaning up..\n", pInfo->local_rank);
     //free(prev_pml_data);
         if (pInfo->local_rank == DELOC_MASTER) {
             if (time_measured == 1) {
@@ -518,22 +613,42 @@ void stop_deloc() {
             //print_comm_mat(comm_mat);
             save_comm_mat(num_tasks);
 
-            free(comm_mat);
             //free(prev_comm_mat);
+            /*
+            free(comm_mat);
             free(node_cpus);
             free(pairs);
+            free(task_loads);
             free(pairs_prev);
             free(node_core_start);
             free(task_core);
             free(task_pids);
             free(numa_cores);
             free(is_mapped);
+            */
+            free_mem_master();
         //map_deinit(&proc_pid_maps);
-            printf("[DeLoc] Mapping changed %dx\n", n_comm_changed-1);
+            printf("[DeLoc] Mapping was applied %d time(s).\n", n_comm_changed);
         }
-    
+
+        free(pInfo);
     //printf("[DeLoc-%d] Monitoring stopped\n", pInfo->local_rank);
     }
+}
+
+void free_mem_master() {
+    free(comm_mat);
+    free(node_cpus);
+    free(pairs);
+    free(task_loads);
+    free(task_loads_prev);
+    free(task_loads_cmp);
+    free(pairs_prev);
+    free(node_core_start);
+    free(task_core);
+    free(task_pids);
+    free(numa_cores);
+    free(is_mapped);
 }
 
 void get_proc_info(orte_proc_info_t orte_proc_info) {
@@ -709,6 +824,7 @@ void get_all_commmat_shm(const int SIZE) {
     //reset_prev_comm_mat();
     for (r = 0; r < num_local_procs; r++) {
         snprintf(shm_name, 16, "DELOC-%d", r);
+        //printf("Get DELOC-%d\n", r);
         if ((shm_fd = shm_open(shm_name, O_RDONLY, 0666)) >= 0) {
             ptr = (size_t *) mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
             for (i = 0; i < num_local_procs; i++) {
@@ -826,6 +942,30 @@ void comm_mat_to_pairs(size_t **mat, struct pair *pairs) {
     //print_pairs(pairs_prev);
 }
 
+void comm_mat_to_pairs_tasks(size_t **mat, struct pair *pairs,
+     struct loadObj *task_loads) {
+    int i, j, r, t;
+    j = t = 0;
+    for (r = 0; r < num_tasks; r++) {
+        task_loads[t].id = r;
+        task_loads[t].load = 0;
+        for (i = r + 1; i < num_tasks; i++) {
+            // loads
+            task_loads[t].load += mat[r][i];
+            // pairs
+            pairs[j].t1 = r;
+            pairs[j].t2 = i;
+            pairs[j].ncomm = mat[r][i];
+            j++;
+        }
+        for (i = 0; i < r; i++) {
+            // loads of lower ranks
+            task_loads[t].load += mat[r][i];
+        }
+        t++;
+    }
+}
+
 // DeLocMap implementation starts here
 
 int compare_task(const void *a, const void *b) {
@@ -844,6 +984,12 @@ int compare_loadObj_rev(const void *a, const void *b) {
     const struct loadObj *ia = (const struct loadObj *) a; // casting pointer types 
     const struct loadObj *ib = (const struct loadObj *) b;
     return ib->load - ia->load;
+}
+
+int compare_loadObj_id(const void *a, const void *b) {
+    const struct loadObj *ia = (const struct loadObj *) a; // casting pointer types 
+    const struct loadObj *ib = (const struct loadObj *) b;
+    return ia->id - ib->id;
 }
 
 void comm_mat_to_task_loads(size_t **mat, struct loadObj *task_loads) {
@@ -991,6 +1137,8 @@ void print_comm_mat(size_t **mat) {
  * Pring comm. matrix in DeLoc format
  */
 void save_comm_mat(int nbtasks) {
+    save_comm_mat_to_file(nbtasks, DELOC_COMM_FILE);
+    /*
     int i, j;
     FILE *of = fopen(DELOC_COMM_FILE, "w");
 
@@ -1004,6 +1152,32 @@ void save_comm_mat(int nbtasks) {
     }
     fclose(of);
     printf("Saved comm. matrix to %s\n", DELOC_COMM_FILE);
+    */
+}
+
+void save_comm_mat_to_file(int nbtasks, const char* out_filename) {
+    int i, j;
+    FILE *of = fopen(out_filename, "w");
+
+    i = nbtasks - 1;
+    for (i = nbtasks - 1; i >= 0; i--) {
+        fprintf(of, "%lu", comm_mat[i][0]);
+        for (j = 1; j < nbtasks; j++) {
+           fprintf(of, ",%lu", comm_mat[i][j]);
+        }
+        fprintf(of, "\n");
+    }
+    fclose(of);
+    printf("Saved comm. matrix to %s\n", out_filename);
+}
+
+void save_comm_mat_part(int nbtasks, int part) {
+    //char *part_st = atoi(part);
+    //char *fname = DELOC_COMM_FILE;
+    //strcat()
+    char fname[32];
+    snprintf(fname, 32, "%s.%d", DELOC_COMM_FILE, part);
+    save_comm_mat_to_file(nbtasks, fname);
 }
 
 int compare_update_pairs(struct pair *p1, struct pair *p2, int n_p) {
@@ -1026,8 +1200,92 @@ int compare_update_task_loads(struct loadObj *l1, struct loadObj *l2, int n_l) {
             diff++;
         }
         l2[i].id = l1[i].id;
+        //l2[i].load = l1[i].load;
     }
     return diff;
+}
+
+int compare_update_task_most(struct loadObj *cur, struct loadObj *prev,
+        int n, int n_changed) {
+    int i, diff;//, same;
+    unsigned before;
+    //int diff = 0;
+    //struct loadObj *tmp;
+    //printf("Comparing update task most..\n");
+    //printf("Tasks_most: ");
+    qsort(cur, n, sizeof (struct loadObj), compare_loadObj_rev);
+    qsort(cur, ntasks_prev, sizeof (struct loadObj), compare_loadObj_id);
+    
+    /*
+    if (n_changed == 0) {
+        for (i = 0; i < ntasks_prev; i++) {
+            prev[i].id = cur[i].id; 
+        }
+        diff = num_tasks;
+    }
+    else {
+    */
+        //qsort(cur, n, sizeof (struct loadObj), compare_loadObj_id);
+        //tmp = (struct loadObj *) malloc(npairs_prev * sizeof (struct loadObj));
+        //memcpy(tmp, cur, npairs_prev*sizeof(struct loadObj));
+        //qsort(tmp, npairs_prev, sizeof (struct loadObj), compare_loadObj_id);
+        //int n_merge = ntasks_prev*2;
+        //struct loadObj *tmp = (struct loadObj *) malloc (n_merge*sizeof(struct loadObj));
+        for (i = 0; i < ntasks_prev; i++) {
+            task_loads_cmp[i].id = cur[i].id;
+            task_loads_cmp[i + ntasks_prev].id = prev[i].id;
+            prev[i].id = cur[i].id; 
+        }
+        /*
+        for (i = 0; i < ntasks_prev; i++) {
+            task_loads_cmp[i+ntasks_prev].id = prev[i].id;
+            prev[i].id = cur[i].id; 
+        }
+        */
+        qsort(task_loads_cmp, ntasks_cmp, sizeof(struct loadObj), compare_loadObj_id);
+    
+        //same = 0;
+        diff = ntasks_cmp;
+        before = task_loads_cmp[0].id;
+        i = 1;
+        //printf("Tmp tasks most: %d ", before);
+        while (i < ntasks_cmp) {
+            //printf("%d ", task_loads_cmp[i].id);
+            if (task_loads_cmp[i].id == before) {
+                //same += 2;
+                diff -= 2;
+            }
+            before = task_loads_cmp[i].id;
+            i++;
+        }
+        //putchar('\n');
+        //free(tmp);
+        //diff = ntasks_cmp - same;
+    //}
+
+    //printf("Diff: %d\n", diff);
+    return diff;
+
+    /*
+    for (int i = 0; i < ntasks_prev; i++) {
+        //printf("%d:%lu ", cur[i].id, cur[i].load);
+        //printf("%d ", cur[i].id);
+        
+        if (cur[i].id != prev[i].id) {
+            diff++;
+        }
+        prev[i].id = cur[i].id;
+        /
+        if (tmp[i].id != prev[i].id) {
+            diff++;
+        }
+        prev[i].id = tmp[i].id;
+        /
+    }*/
+    //putchar('\n');
+    //free(tmp);
+    //printf("Finished compare update task most..\n");
+    //return diff;
 }
 
 int map_to_next_core(int node_id, int task_id) {
