@@ -41,6 +41,7 @@ void * monitor_exec_measure(void *args) {
     struct timespec start, end;
     size_t *pml_data = (size_t *) args;
     mat_size = sizeof (size_t) * num_local_procs;
+    int *itvs = (int *) malloc(24 * sizeof (int));
 
     n_poll = 0;
     is_thread_running = true;
@@ -72,8 +73,6 @@ void * monitor_exec_measure(void *args) {
             qsort(pairs, npairs, sizeof (struct pair), compare_pair);
             //printf("Compare update task most..\n");
             diff = compare_update_task_most(task_loads, task_loads_prev, num_tasks, n_comm_changed);
-            //comm_mat_to_pairs_tasks(comm_mat, pairs, task_loads);
-            //qsort(pairs, npairs, sizeof (struct pair), compare_pair);
             //diff = compare_update_pairs(pairs, pairs_prev, npairs_prev);
             //diff2 = compare_update_task_most(task_loads, task_loads_prev, num_tasks);
             //print_pairs(pairs, npairs);
@@ -90,14 +89,15 @@ void * monitor_exec_measure(void *args) {
             // make interval longer
             //printf("[DeLoc] diff1=%d, diff2=%d\n", diff, diff2);
             //if (diff < n_cores_per_node) {
-            if (diff < tasks_diff_lim && pollInterval < INTERVAL_MAX) {
+            //if (diff < tasks_diff_lim && pollInterval < INTERVAL_MAX) {
+            if (diff < tasks_diff_lim){
                 //if (pollInterval < INTERVAL_MAX){
                 pollInterval *= slope_m;
                 //}
             }
             else {
              
-                //pollInterval *= slope_n;
+                pollInterval *= slope_n;
                 map_deloc();
                 //map_deloc_tl();
                 //map_balance();
@@ -120,11 +120,21 @@ void * monitor_exec_measure(void *args) {
                 save_comm_mat_part(num_tasks, n_poll);
             }
         }
+        if (n_poll < 24) {
+            itvs[n_poll] = pollInterval;
+        }
         n_poll++;
         delay_poll(pollInterval);
         //usleep(pollInterval);
     }
     is_thread_running = false;
+    if (pInfo->local_rank == DELOC_MASTER) {
+        printf("[DeLoc] Mapping intervals:");
+        for (i = 0; i < n_poll; i++) {
+            printf(" %d", itvs[i]);
+        }
+        putchar('\n');
+    }
     pthread_exit(NULL);
 }
 
@@ -261,9 +271,9 @@ void * monitor_exec(void *args) {
 
                 // Slowage the polling
                 //printf("\tCurrent PollInterval: %d us\n", pollInterval);
-                if (pollInterval < INTERVAL_MAX){
+                //if (pollInterval < INTERVAL_MAX){
                     pollInterval *= slope_m;
-                }
+                //}
                 //pollInterval *= slope_m;
                 //continue;
             }
@@ -447,7 +457,11 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         int num_pus = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_PU);
         //num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_PACKAGE);
         //num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_NUMANODE);
+        // In some hws such as KNL, the processor node is shown by the GROUP object
         num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_GROUP);
+        if (num_nodes <= 0) {
+            num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_SOCKET);
+        }
         printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n", num_nodes,
                 num_pus, num_cores, num_pus/num_nodes);
 
@@ -466,7 +480,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         pairs_prev = (struct pair *) malloc(npairs_prev * sizeof (struct pair));
         ntasks_prev = num_tasks * 0.5;
         tasks_diff_lim = ntasks_prev * (1-pairs_equal_ratio);
-        ntasks_cmp = ntasks_prev * 2;
+        ntasks_cmp = ntasks_prev * 2;   // doubled for the comparison step
 
         // Use physical core if possible
         if (num_tasks > num_cores && num_tasks <= num_pus) {
