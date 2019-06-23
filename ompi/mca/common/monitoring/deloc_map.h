@@ -79,8 +79,8 @@ unsigned *cur_mapping;
 int num_pids;
 __pid_t *task_pids;
 
-// Polling interval in seconds
-int pollInterval;
+// Polling interval in microseconds
+unsigned long pollInterval;
 int pollNMax;
 float slope_m, slope_n;
 unsigned deloc_enabled;
@@ -122,6 +122,7 @@ int num_tasks;
 int **node_cpus;
 int *node_core_start;
 int *task_core;
+int *task_core_prev;
 int num_tasks, n_cores_per_node;
 struct loadObj *node_loads;
 struct loadObj *task_loads;
@@ -130,11 +131,14 @@ struct loadObj *task_loads_cmp;
 int ntasks_cmp; 
 // logical sequential => physical core ids
 int *numa_cores;
+// map of the logical ids to nodes
+int *numa_cores_node;
 bool *is_mapped;
 
 OMPI_DECLSPEC int map_to_next_core(int node_id, int task_id);
 OMPI_DECLSPEC void map_deloc(void );
 OMPI_DECLSPEC void map_deloc_tl(void );
+OMPI_DECLSPEC void map_deloc_if(void );
 OMPI_DECLSPEC void map_balance(void );
 OMPI_DECLSPEC void map_locality(void );
 OMPI_DECLSPEC int compare_pair(const void * a, const void * b);
@@ -153,6 +157,7 @@ OMPI_DECLSPEC void reset_node_loads(void );
 OMPI_DECLSPEC void print_node_cpus(void );
 OMPI_DECLSPEC void print_numa_node_cpus(int node);
 OMPI_DECLSPEC void print_task_core(void );
+OMPI_DECLSPEC void update_task_core_prev(void );
 OMPI_DECLSPEC void print_task_loads(void );
 OMPI_DECLSPEC void print_comm_mat(size_t **comm_mat );
 OMPI_DECLSPEC void print_pairs(struct pair *pairs, int n_p);
@@ -165,8 +170,10 @@ OMPI_DECLSPEC int compare_update_task_most(struct loadObj *cur, struct loadObj *
 OMPI_DECLSPEC void save_comm_mat(int nbtasks);
 OMPI_DECLSPEC void save_comm_mat_part(int nbtasks, int part);
 OMPI_DECLSPEC void save_comm_mat_to_file(int nbtasks, const char* out_filename);
-OMPI_DECLSPEC void delay_poll(int pollInterval);
+OMPI_DECLSPEC void delay_poll(unsigned long pollInterval);
 OMPI_DECLSPEC void free_mem_master(void );
+OMPI_DECLSPEC void update_poll_itv_shm(unsigned long new_itv);
+OMPI_DECLSPEC void get_poll_itv_shm(void );
 
 END_C_DECLS
 

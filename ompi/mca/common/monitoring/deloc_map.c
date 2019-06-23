@@ -25,10 +25,13 @@
 #include "deloc_metis.h"
 #define DELOC_MASTER 0
 #define DELOC_COMM_FILE "deloc.comm.csv"
-//#define master_rank 7
-#define MASTER_DELAY 500000
-#define DELAY_STEP 500000
-#define INTERVAL_MAX 4000000
+#define MASTER_DELAY    500000
+#define DELAY_STEP      500000
+#define DELAY_STEP_MAX  1000000
+#define INTERVAL_MAX    8000000
+#define INTERVAL_MIN    500000
+#define SIZE_POLL_ITV   sizeof(unsigned long)
+#define MAX_RECORD_ITV  24
 
 int compare_pair(const void * a, const void * b) {
     struct pair *p1 = (struct pair *) a;
@@ -41,7 +44,7 @@ void * monitor_exec_measure(void *args) {
     struct timespec start, end;
     size_t *pml_data = (size_t *) args;
     mat_size = sizeof (size_t) * num_local_procs;
-    int *itvs = (int *) malloc(24 * sizeof (int));
+    int *itvs = (int *) malloc(MAX_RECORD_ITV * sizeof (int));
 
     n_poll = 0;
     is_thread_running = true;
@@ -98,19 +101,24 @@ void * monitor_exec_measure(void *args) {
             else {
              
                 pollInterval *= slope_n;
-                map_deloc();
+                map_deloc_if();
+                //map_deloc();
                 //map_deloc_tl();
                 //map_balance();
                 //map_locality();
             
-                // Enforce the mapping
+                // Get the PIDs
                 if (num_pids < num_tasks) {
                     get_all_task_shm();
                 }
+                
+                // Enforce the mapping
                 // Array based implementation
                 for (i = 0; i < num_tasks; i++) {
                     //printf("Task-%d: pid #%d ", i, task_pids[i]);
-                    map_proc(task_pids[i], task_core[i]);
+                    if (task_core[i] != task_core_prev[i]) {
+                        map_proc(task_pids[i], task_core[i]);
+                    }
                     //get_proc_affinity(task_pids[i]);
                 }
             
@@ -120,7 +128,7 @@ void * monitor_exec_measure(void *args) {
                 save_comm_mat_part(num_tasks, n_poll);
             }
         }
-        if (n_poll < 24) {
+        if (n_poll < MAX_RECORD_ITV) {
             itvs[n_poll] = pollInterval;
         }
         n_poll++;
@@ -138,12 +146,16 @@ void * monitor_exec_measure(void *args) {
     pthread_exit(NULL);
 }
 
-void delay_poll(int pollInterval) {
-    // every 100 ms
-    //int step = 100000;  //in us
-    int i;
-    for (i = pollInterval; i >= DELAY_STEP; i -= DELAY_STEP) {
-        usleep(DELAY_STEP);
+void delay_poll(unsigned long itv) {
+    unsigned int step;
+    unsigned long i = itv;
+    if (i >= DELAY_STEP_MAX)
+        step = DELAY_STEP_MAX;
+    else
+        step = DELAY_STEP;
+    while (i >= step) {
+        usleep(step);
+        i -= step;
     }
     if (i > 0) {
         usleep(i);
@@ -264,7 +276,8 @@ void * monitor_exec(void *args) {
             //printf("[DeLoc] diff1=%d, diff2=%d\n", diff, diff2);
             //printf("[DeLoc] diff=%d, lim=%d\n", diff, diff_lim);
             //if (diff < n_cores_per_node) {
-            if (diff < tasks_diff_lim) {
+            //if (diff < tasks_diff_lim) {
+            if (diff < tasks_diff_lim && pollInterval < INTERVAL_MAX) {
                 //printf("** Comm. does not change, skipped mapping\n");
                 //print_pairs(pairs,npairs);
                 //print_pairs(pairs_prev,npairs_prev);
@@ -278,25 +291,33 @@ void * monitor_exec(void *args) {
                 //continue;
             }
             else {
-             
-            //pollInterval *= slope_n;
-            map_deloc();
-            //map_deloc_tl();
-            //map_balance();
-            //map_locality();
-
+                if (pollInterval > INTERVAL_MIN) {
+                    pollInterval *= slope_n;
+                }
+                map_deloc_if();
+                //map_deloc();
+                //map_deloc_tl();
+                //map_balance();
+                //map_locality();
             
-            // Enforce the mapping
-            if (num_pids < num_tasks) {
-                get_all_task_shm();
-            }
+                // Get the PIDs
+                if (num_pids < num_tasks) {
+                    get_all_task_shm();
+                }
             
-            // Array based implementation
-            for (i = 0; i < num_tasks; i++) {
-                //printf("Task-%d: pid #%d ", i, task_pids[i]);
-                map_proc(task_pids[i], task_core[i]);
-                //get_proc_affinity(task_pids[i]);
-            }
+                // Enforce the mapping
+                // Array based implementation
+                for (i = 0; i < num_tasks; i++) {
+                    //printf("Task-%d: pid #%d ", i, task_pids[i]);
+                    if (task_core[i] != task_core_prev[i]) {
+                    //    && numa_cores_node[task_core[i]] != numa_cores_node[task_core_prev[i]]) {
+                         map_proc(task_pids[i], task_core[i]);
+                    }
+                    //get_proc_affinity(task_pids[i]);
+                }
+                
+                // Save current map to prev
+                update_task_core_prev();
             
             //putchar('\n');
             
@@ -341,13 +362,15 @@ void * monitor_exec(void *args) {
              */
             //clock_gettime(CLOCK_MONOTONIC, &end);
             //mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
-            n_comm_changed++;
+                n_comm_changed++;
             }
+            update_poll_itv_shm(pollInterval);
         }
         n_poll++;
         //usleep(pollInterval);
         //usleep(pollInterval); // First wait
-        //printf("\tCurrent PollInterval: %d ms\n", pollInterval);
+        get_poll_itv_shm();
+        //printf("\tCurrent PollInterval: %lu us\n", pollInterval);
         delay_poll(pollInterval);
         //req.tv_sec = 0;
         //req.tv_nsec = pollInterval * 1000000L;
@@ -408,8 +431,9 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
     if (pInfo->local_rank == DELOC_MASTER) {
         // For rand()
         //srand(pInfo->pid);
-        printf("[DeLoc] Poll interval: %d (us), max_count: %d\n", pollInterval, pollNMax);
+        printf("[DeLoc] Poll interval: %lu (us), max_count: %d\n", pollInterval, pollNMax);
         //printf("[DeLoc] Application name: %s\n",  ORTE_APP_CONTEXT->app);
+        update_poll_itv_shm(pollInterval);
 
         // Load settings from the environment
         const char* env_pairs_equal = getenv("DELOC_PAIRS_EQ_RATIO");
@@ -511,10 +535,11 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         // Print node CPU using numactl
         //int num_numa_cores = numa_num_configured_cpus();
         numa_cores = (int *) malloc (num_cores * sizeof(int));
+        numa_cores_node = (int *) malloc (num_cores * sizeof(int));
         get_numa_cpus();
-        printf("[NUMACTL] Physical core IDs:\n");
+        printf("[NUMACTL] (Node IDs):(Physical core IDs)\n");
         for (i = 0; i < num_cores; i++) {
-            printf(" %d", numa_cores[i]);
+            printf(" %d:%d", numa_cores_node[i], numa_cores[i]);
         }
         putchar('\n');
         /*
@@ -524,8 +549,10 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         */
         // Task to core id mapping with flat and sequential numbering
         task_core = (int *) malloc(num_tasks * sizeof (int));
+        task_core_prev = (int *) malloc(num_tasks * sizeof (int));
         for (i = 0; i < num_tasks; i++) {
-            task_core[i] = -1;
+            //task_core[i] = task_core_prev[i] = -1;
+            task_core[i] = task_core_prev[i] = i;
         }
         node_core_start = (int *) malloc(num_nodes * sizeof (int));
 
@@ -554,6 +581,11 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
             printf("\tTask-%d, load=%ld\n", task_loads[i].id, task_loads[i].load);
         }
         */
+        // Perform initial mapping
+        get_all_task_shm();
+        for (i = 0; i < num_tasks; i++) {
+            map_proc(task_pids[i], task_core[i]);
+        }
     }
     stopDelocMon = false;
     poll_time_used = 0; 
@@ -815,13 +847,14 @@ void del_shm(const char *shm_name) {
 void get_commmat_shm(const char *shm_name, size_t *to_data, int np) {
     const int SIZE = sizeof (size_t) * np;
     int shm_fd;
-    size_t *ptr;
+    //size_t *ptr;
     if ((shm_fd = shm_open(shm_name, O_RDONLY, 0666)) >= 0) {
-        ptr = (size_t *) mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
+        //ptr = (size_t *) mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
+        void *ptr = mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
         for (int i = 0; i < np; i++) {
-            to_data[i] = ptr[i];
+            to_data[i] = ((size_t *)ptr)[i];
         }
-        munmap(to_data, SIZE);
+        munmap(ptr, SIZE);
         close(shm_fd);
     } else {
         printf("Err: failed reading shm\n");
@@ -832,7 +865,7 @@ void get_all_commmat_shm(const int SIZE) {
     //const int SIZE = sizeof (size_t) * num_local_procs;
     char shm_name[16];
     int shm_fd, r, i;//, j;
-    size_t *ptr;
+    //size_t *ptr;
 
     reset_comm_mat();
     //reset_prev_comm_mat();
@@ -840,14 +873,16 @@ void get_all_commmat_shm(const int SIZE) {
         snprintf(shm_name, 16, "DELOC-%d", r);
         //printf("Get DELOC-%d\n", r);
         if ((shm_fd = shm_open(shm_name, O_RDONLY, 0666)) >= 0) {
-            ptr = (size_t *) mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
+            //ptr = (size_t *) mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
+            void *ptr = mmap(0, SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
             for (i = 0; i < num_local_procs; i++) {
-                comm_mat[r][i] += ptr[i];
-                comm_mat[i][r] += ptr[i];
+                comm_mat[r][i] += ((size_t*)ptr)[i];
+                comm_mat[i][r] += ((size_t*)ptr)[i];
+                //comm_mat[i][r] += ptr[i];
                 //prev_comm_mat[r][i] += ptr[i];
                 //prev_comm_mat[i][r] += ptr[i];
             }
-            //munmap(comm_mat, SIZE);
+            munmap(ptr, SIZE);
             close(shm_fd);
         } else if (!stopDelocMon) {
             printf("[#%d] Err: failed reading shm\n", pInfo->local_rank);
@@ -870,19 +905,21 @@ void get_all_task_shm() {
     //const int SIZE = sizeof (struct info);
     char shm_name[16];
     int shm_fd, r;
-    struct info *ptr;
+    //struct info *ptr;
 
     for (r = 0; r < num_local_procs; r++) {
         snprintf(shm_name,16, "DELOC-t-%d", r);
         if ((shm_fd = shm_open(shm_name, O_RDONLY, 0666)) >= 0) {
-            ptr = (struct info *) mmap(0, sizeof(struct info), PROT_READ,
+            void *v_ptr = mmap(0, sizeof(struct info), PROT_READ,
                  MAP_SHARED, shm_fd, 0);
+            //ptr =  (struct info *) v_ptr;
             //char rank_s[16];
             //snprintf(rank_s, 16, "%d", ptr->local_rank);
             //d_tasks[r].task_id = ptr->pid;
-            task_pids[r] = ptr->pid;
+            task_pids[r] = ((struct info *) v_ptr)->pid;
             num_pids++;
 
+            munmap(v_ptr, sizeof(struct info));
             close(shm_fd);
         } else {
             printf("Error: failed reading tasks shm\n");
@@ -938,6 +975,43 @@ void update_task_shm(struct info *p_info) {
         close(shm_fd);
     } else {
         printf("Err: failed writing task info to shm\n");
+    }
+}
+
+void update_poll_itv_shm(unsigned long new_itv) {
+    int shm_fd; 
+    if ((shm_fd = shm_open("DELOC-pollItv", O_CREAT | O_RDWR, 0666)) >= 0) {
+        if (ftruncate(shm_fd, SIZE_POLL_ITV) == 0) {
+            unsigned long *ptr = (unsigned long *) mmap(0, SIZE_POLL_ITV,
+                 PROT_WRITE, MAP_SHARED, shm_fd, 0);
+            *ptr = new_itv;
+            munmap(ptr, SIZE_POLL_ITV);
+        }
+        else {
+            printf("Err: shm failed ftruncate(): pollInterval\n");
+        }
+        close(shm_fd);
+    } else {
+        printf("Err: failed writing pollInterval to shm\n");
+    }
+}
+
+void get_poll_itv_shm() {
+    //unsigned long new_itv = pollInterval;
+    int shm_fd;
+    
+    if ((shm_fd = shm_open("DELOC-pollItv", O_RDONLY, 0666)) >= 0) {
+        //ret = ftruncate(shm_fd, SIZE);
+        //if (ftruncate(shm_fd, sizeof(unsigned long)) == 0) {
+        void *ptr = mmap(0, SIZE_POLL_ITV,
+                 PROT_READ, MAP_SHARED, shm_fd, 0);
+        if (ptr != MAP_FAILED) {
+            pollInterval = *(unsigned long *) ptr;
+        }
+        munmap(ptr, SIZE_POLL_ITV);
+        close(shm_fd);
+    } else {
+        printf("Err: failed reading pollInterval from shm\n");
     }
 }
 
@@ -1057,6 +1131,12 @@ void print_task_core() {
     }
 }
 
+void update_task_core_prev() {
+    for (int i = 0; i < num_tasks; i++) {
+        task_core_prev[i] = task_core[i];
+    }
+}
+
 void print_task_loads() {
     for (int i = 0; i < num_tasks; i++) {
         printf("\tTask-%d: %lu\n", task_loads[i].id, task_loads[i].load);
@@ -1103,7 +1183,9 @@ void get_numa_cpus() {
             k = j = 0;
             while (j < cpus->size && k < n_cores_per_node) {
                 if (numa_bitmask_isbitset(cpus, j)) {
-                    numa_cores[c++] = j;
+                    numa_cores[c] = j;
+                    numa_cores_node[c] = i;
+                    c++;
                     k++;
                 }
                 j++;
@@ -1327,8 +1409,41 @@ int map_to_next_core(int node_id, int task_id) {
     if (target_node > -1) {
         task_core[task_id] = node_core_to_ser(target_node, target_core);
     }
+    else {
+        printf("Err: cannot map to any node: %d\n", task_id);
+    }
     return target_node;
 }
+
+/*
+int map_to_next_core_if(int node_id, int task_id) {
+    int target_node = -1;
+    int target_core = -1;
+    if (is_avail(node_id)) {
+        target_node = node_id;
+        target_core = node_core_start[target_node];
+        node_cpus[node_id][target_core] = task_id;
+        node_core_start[target_node]++;
+    } else {
+        int tried = 0;
+        int cand_node = next_node(node_id);
+        while ((target_node == -1) && (tried < num_nodes)) {
+            if (is_avail(cand_node)) {
+                target_node = cand_node;
+                target_core = node_core_start[target_node];
+                node_cpus[target_node][target_core] = task_id;
+                node_core_start[target_node]++;
+            }
+            tried++;
+            cand_node = next_node(cand_node);
+        }
+    }
+    if (target_node > -1) {
+        task_core[task_id] = node_core_to_ser(target_node, target_core);
+    }
+    return target_node;
+}
+*/
 
 void map_deloc() {
     int i, n_mapped;
@@ -1395,6 +1510,44 @@ void map_deloc() {
     }
     //print_node_cpus();
     //print_task_core();
+}
+
+void map_deloc_if() {
+    int i, n_mapped, t1_node;
+    
+    reset_node_core_start();
+
+    //bool is_mapped[num_tasks];
+    for (i = 0; i < num_tasks; i++) {
+        is_mapped[i] = false;
+    }
+
+    n_mapped = 0;
+    i = 0;
+    //t1_node = numa_cores_node[task_core_prev[p.t1]];
+    while (n_mapped < num_tasks && i < npairs) {
+        struct pair p = pairs[i];
+
+        if (!is_mapped[p.t1]) {
+            t1_node = numa_cores_node[task_core_prev[p.t1]];
+            t1_node = map_to_next_core(t1_node, p.t1);
+            if (t1_node > -1) {
+                n_mapped++;
+                is_mapped[p.t1] = true;
+            }
+        } else {
+            // Mapped before
+            t1_node = ser_core_to_node(task_core[p.t1]);
+        }
+        if (!is_mapped[p.t2]) {
+            t1_node = map_to_next_core(t1_node, p.t2);
+            if (t1_node > -1) {
+                n_mapped++;
+                is_mapped[p.t2] = true;
+            }
+        }
+        i++;
+    }
 }
 
 void map_balance() {
