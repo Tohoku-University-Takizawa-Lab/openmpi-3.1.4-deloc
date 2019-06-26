@@ -24,6 +24,8 @@
 
 BEGIN_C_DECLS
 
+#define SHM_N_LEN   16
+
 struct info {
     __pid_t pid;
     int node_rank;
@@ -57,6 +59,9 @@ typedef map_t(__pid_t) pid_map_t;
 bool stopDelocMon;
 pthread_t delocThread;
 struct info * pInfo;
+orte_proc_info_t proc_info;
+char shm_name_mat[SHM_N_LEN];   //SHM name for the comm matrix
+char shm_name_pid[SHM_N_LEN];   //SHM name for each process' pid
 //size_t *prev_pml_data;
 size_t **comm_mat;
 size_t **prev_comm_mat;
@@ -82,6 +87,7 @@ __pid_t *task_pids;
 // Polling interval in microseconds
 unsigned long pollInterval;
 int pollNMax;
+unsigned long pollIntervalMax;
 float slope_m, slope_n;
 unsigned deloc_enabled;
 unsigned time_measured;
@@ -94,13 +100,14 @@ double poll_time_used;
 double mapping_time_used;
 // Flag to monitor thread
 bool is_thread_running;
+// Flag to export the last matrix to file
+bool export_comm_mat;
 
 OMPI_DECLSPEC void stop_deloc(void );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
 OMPI_DECLSPEC void map_proc(__pid_t pid, int core_id);
 OMPI_DECLSPEC void map_rank(unsigned rank_id, int core_id);
 OMPI_DECLSPEC void map_proc_rand(__pid_t pid);
-OMPI_DECLSPEC void init_commmat_shm(int np, const char *shm_name);
 OMPI_DECLSPEC void del_shm(const char *shm_name);
 OMPI_DECLSPEC void update_commmat_shm(const char *shm_name, size_t *data, int np);
 OMPI_DECLSPEC void update_task_shm(struct info *task_info);
@@ -119,7 +126,7 @@ void *monitor_exec_measure(void *args);
 //int num_tasks, num_nodes, num_cores, n_cores_per_node;
 int num_tasks;
 // NUMA machine representation: 2d array of nodes and cores
-int **node_cpus;
+//int **node_cpus;
 int *node_core_start;
 int *task_core;
 int *task_core_prev;
@@ -174,6 +181,8 @@ OMPI_DECLSPEC void delay_poll(unsigned long pollInterval);
 OMPI_DECLSPEC void free_mem_master(void );
 OMPI_DECLSPEC void update_poll_itv_shm(unsigned long new_itv);
 OMPI_DECLSPEC void get_poll_itv_shm(void );
+OMPI_DECLSPEC void update_my_pid_shm(void );
+OMPI_DECLSPEC void get_all_pids_shm(void );
 
 END_C_DECLS
 
