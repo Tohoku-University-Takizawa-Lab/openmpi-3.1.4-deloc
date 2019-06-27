@@ -161,11 +161,11 @@ void delay_poll(unsigned long itv) {
         step = DELAY_STEP_MAX;
     else
         step = DELAY_STEP;
-    while (i >= step) {
+    while (i >= step && !stopDelocMon) {
         usleep(step);
         i -= step;
     }
-    if (i > 0) {
+    if (i > 0 && !stopDelocMon) {
         usleep(i);
     }
 }
@@ -449,6 +449,14 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         update_poll_itv_shm(pollInterval);
 
         // Load settings from the environment
+        const char* env_silent_mode = getenv("DELOC_SILENT_MODE");
+        if (env_silent_mode != NULL && atoi(env_silent_mode) == 1) {
+            silent_mode = true;
+        }
+        else {
+            silent_mode = false;
+        }
+
         const char* env_itv_max = getenv("DELOC_POLL_INTERVAL_MAX");
         if (env_itv_max != NULL) {
             pollIntervalMax = atoi(env_itv_max);
@@ -456,8 +464,8 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         else {
             pollIntervalMax = INTERVAL_MAX_DEF;
         }
-        printf("[DeLoc] Poll interval: %lu (max=%lu) microsecs, max_count: %d\n", pollInterval,
-                 pollIntervalMax, pollNMax);
+        //printf("[DeLoc] Poll interval: %lu (max=%lu) microsecs, max_count: %d\n", pollInterval,
+        //         pollIntervalMax, pollNMax);
     
         const char* env_pairs_equal = getenv("DELOC_PAIRS_EQ_RATIO");
         if (env_pairs_equal != NULL) {
@@ -517,8 +525,8 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         if (num_nodes <= 0) {
             num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_SOCKET);
         }
-        printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n", num_nodes,
-                num_pus, num_cores, num_pus/num_nodes);
+        //printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n", num_nodes,
+        //        num_pus, num_cores, num_pus/num_nodes);
 
         //d_tasks = (struct d_task *) malloc(num_local_procs * sizeof (struct d_task));
         num_tasks = num_local_procs;
@@ -527,7 +535,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         for (i = 0; i < npairs; i++) {
             pairs[i].ncomm = 0;
         }
-        printf("[DeLoc] Number of tasks=%d, number of pairs=%d\n", num_tasks, npairs);
+        //printf("[DeLoc] Number of tasks=%d, number of pairs=%d\n", num_tasks, npairs);
 
         //npairs_prev = num_tasks * pairs_equal_ratio;
         npairs_prev = num_tasks * 1.4;  // diagonal
@@ -568,11 +576,13 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
         numa_cores = (int *) malloc (num_cores * sizeof(int));
         numa_cores_node = (int *) malloc (num_cores * sizeof(int));
         get_numa_cpus();
+        /*
         printf("[NUMACTL] (Node IDs):(Physical core IDs)\n");
         for (i = 0; i < num_cores; i++) {
             printf(" %d:%d", numa_cores_node[i], numa_cores[i]);
         }
         putchar('\n');
+        */
         /*
         for (int i = 0; i < num_nodes; i++) {
             print_numa_node_cpus(i);
@@ -612,6 +622,23 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_data) {
             printf("\tTask-%d, load=%ld\n", task_loads[i].id, task_loads[i].load);
         }
         */
+        // Print information
+        if (silent_mode == false) {
+            //printf("/** On-DeLoc Information **/\n"
+            //       "\tNumber of nodes: %d\n"
+            printf("[DeLoc] Poll interval: %lu (max=%lu) microsecs, max_count: %d\n", pollInterval,
+                     pollIntervalMax, pollNMax);
+            printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n",
+                    num_nodes, num_pus, num_cores, num_pus/num_nodes);
+            printf("[DeLoc] Number of tasks=%d, number of pairs=%d\n", num_tasks, npairs);
+    
+            printf("[NUMACTL] (Node IDs):(Physical core IDs)\n");
+            for (i = 0; i < num_cores; i++) {
+                printf(" %d:%d", numa_cores_node[i], numa_cores[i]);
+            }
+            putchar('\n');
+        }
+
         // Perform initial mapping
         usleep(MASTER_DELAY);   // Delay to let all processes finish updating their pid
         //get_all_task_shm();
@@ -668,19 +695,18 @@ void stop_deloc() {
         stopDelocMon = true;
         // Update the last state of comm. matrix
         //update_commmat_shm(pInfo->shm_name, pml_events, num_local_procs);
+        
         while (is_thread_running == true) {
-            // wait for all thread finished
-            //printf("Still running..\n");
-            sleep(1);
+            // wait for main thread finished
+            //sleep(1);
+            usleep(100000); //100 ms
         }
-
         //del_shm(pInfo->shm_name);
         //snprintf(info_shm, 16, "DELOC-t-%d", pInfo->local_rank);
         //del_shm(info_shm);
         //snprintf(info_shm, 16, "DELOC-p-%d", proc_info.my_local_rank);
-        del_shm(shm_name_pid);
-        del_shm(SHM_POLL_ITV);
-        del_shm(shm_name_mat);
+        //del_shm(shm_name_pid);
+        //del_shm(shm_name_mat);
 
         if (time_measured == 1) {
             //printf("[DeLoc-%d],elapsed_time,update_comm(),%f,ms\n", pInfo->local_rank, poll_time_used);
@@ -702,11 +728,15 @@ void stop_deloc() {
                 save_comm_mat(num_tasks);
             }
 
-            //free(prev_comm_mat);
-            free_mem_master();
-            //map_deinit(&proc_pid_maps);
+            // Always print this information
             printf("[DeLoc] Mapping was applied %d time(s).\n", n_comm_changed);
+            // Cleanup
+            del_shm(SHM_POLL_ITV);
+            free_mem_master();
+            //free(prev_comm_mat);
         }
+        del_shm(shm_name_pid);
+        del_shm(shm_name_mat);
 
         //free(pInfo);
         //printf("[DeLoc-%d] Monitoring stopped\n", pInfo->local_rank);

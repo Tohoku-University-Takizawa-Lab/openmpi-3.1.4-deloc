@@ -102,6 +102,7 @@ double mapping_time_used;
 bool is_thread_running;
 // Flag to export the last matrix to file
 bool export_comm_mat;
+bool silent_mode;
 
 OMPI_DECLSPEC void stop_deloc(void );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
