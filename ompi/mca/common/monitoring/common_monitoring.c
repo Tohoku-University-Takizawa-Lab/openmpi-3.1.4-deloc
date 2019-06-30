@@ -494,8 +494,8 @@ int mca_common_monitoring_add_procs(struct ompi_proc_t **procs,
             break;
         }
     }
-    init_deloc(orte_process_info, pml_data);
-    //init_deloc(orte_process_info, pml_count);
+    //init_deloc(orte_process_info, pml_data);
+    init_deloc(orte_process_info, pml_count, pml_data);
     return OMPI_SUCCESS;
 }
 
@@ -767,10 +767,17 @@ static void mca_common_monitoring_output( FILE *pf, int my_rank, int nbprocs )
  */
 static int mca_common_monitoring_flush(int fd, char* filename)
 {
+    /* Dump to DeLoc for any output flag was given */
+    /*
+    if (is_deloc_enabled() == true) {
+        printf("Dump pml_data to deloc..\n"); 
+        deloc_output(pml_data);
+    }*/
+    
     /* If we are not drived by MPIT then dump the monitoring information */
     if( 0 == mca_common_monitoring_current_state || 0 == fd ) /* if disabled do nothing */
         return OMPI_SUCCESS;
-
+    
     if( 1 == fd ) {
         OPAL_MONITORING_PRINT_INFO("Proc %" PRId32 " flushing monitoring to stdout", rank_world);
         mca_common_monitoring_output( stdout, rank_world, nprocs_world );

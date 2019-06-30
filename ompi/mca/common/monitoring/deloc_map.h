@@ -115,11 +115,12 @@ OMPI_DECLSPEC void update_task_shm(struct info *task_info);
 OMPI_DECLSPEC void get_commmat_shm(const char *shm_name, size_t *to_data, int np);
 OMPI_DECLSPEC void get_all_commmat_shm(const int SIZE );
 OMPI_DECLSPEC void get_all_task_shm(void );
-OMPI_DECLSPEC void init_deloc(orte_proc_info_t orte_proc_info, size_t * pml_data);
+OMPI_DECLSPEC void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_data);
 OMPI_DECLSPEC void reset_comm_mat(void );
 OMPI_DECLSPEC void reset_prev_comm_mat(void );
 OMPI_DECLSPEC void comm_mat_to_pairs(size_t **mat, struct pair *pairs);
 OMPI_DECLSPEC void get_proc_affinity(__pid_t pid);
+OMPI_DECLSPEC void deloc_pml_output(size_t * pml_arr);
 void *monitor_exec(void *args);
 void *monitor_exec_measure(void *args);
 
@@ -149,6 +150,7 @@ OMPI_DECLSPEC void map_deloc_tl(void );
 OMPI_DECLSPEC void map_deloc_if(void );
 OMPI_DECLSPEC void map_balance(void );
 OMPI_DECLSPEC void map_locality(void );
+OMPI_DECLSPEC void map_rr_node(void );
 OMPI_DECLSPEC int compare_pair(const void * a, const void * b);
 OMPI_DECLSPEC int compare_task(const void *a, const void *b);
 OMPI_DECLSPEC int compare_loadObj(const void *a, const void *b);
@@ -184,6 +186,8 @@ OMPI_DECLSPEC void update_poll_itv_shm(unsigned long new_itv);
 OMPI_DECLSPEC void get_poll_itv_shm(void );
 OMPI_DECLSPEC void update_my_pid_shm(void );
 OMPI_DECLSPEC void get_all_pids_shm(void );
+OMPI_DECLSPEC bool is_deloc_enabled(void );
+OMPI_DECLSPEC void get_numa_cpus_phi_26(void );
 
 END_C_DECLS
 
