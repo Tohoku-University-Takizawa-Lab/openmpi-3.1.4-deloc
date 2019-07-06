@@ -26,8 +26,8 @@
 #define DELOC_MASTER        0
 //#define DELOC_MASTER        7
 #define DELOC_COMM_FILE     "deloc.comm.csv"
-#define MASTER_DELAY        300000
-//#define MASTER_DELAY        500000
+//#define MASTER_DELAY        300000
+#define MASTER_DELAY        500000
 #define DELAY_STEP          500000
 #define DELAY_STEP_MAX      1000000
 #define INTERVAL_MAX_DEF    10000000
@@ -426,12 +426,12 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
     int i, j;
     size_t *pml_meter;
 
-    const char* env_deloc_enable = getenv("DELOC_ENABLED");
-    if (env_deloc_enable != NULL && atoi(env_deloc_enable) == 0) {
-        deloc_enabled = 0;
-        return; 
-    }
-    deloc_enabled = 1;
+    //const char* env_deloc_enable = getenv("DELOC_ENABLED");
+    //if (env_deloc_enable != NULL && atoi(env_deloc_enable) == 0) {
+    //    deloc_enabled = 0;
+    //    return; 
+    //}
+    //deloc_enabled = 1;
 
     //pInfo = (struct info *) malloc(sizeof (struct info));
     //get_proc_info(orte_proc_info);
@@ -444,6 +444,24 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
     snprintf(shm_name_mat, SHM_N_LEN, "DELOC-%d", proc_info.my_local_rank);
     snprintf(shm_name_pid, SHM_N_LEN, "DELOC-p-%d", proc_info.my_local_rank);
     // Update this process id to shm
+    //update_my_pid_shm();
+    
+    const char* env_export_mat = getenv("DELOC_EXPORT_MAT");
+    if (env_export_mat != NULL && atoi(env_export_mat) == 1) {
+        export_comm_mat = true;
+    }
+    else {
+        export_comm_mat = false;
+    }
+    
+    const char* env_deloc_enable = getenv("DELOC_ENABLED");
+    if (env_deloc_enable != NULL && atoi(env_deloc_enable) == 0) {
+        deloc_enabled = 0;
+        return; 
+    }
+    deloc_enabled = 1;
+    
+    // Update my process id to shm
     update_my_pid_shm();
 
     /* Set global environment settings */
@@ -525,14 +543,6 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
             slope_n = 0.7;
         }
     
-        const char* env_export_mat = getenv("DELOC_EXPORT_MAT");
-        if (env_export_mat != NULL && atoi(env_export_mat) == 1) {
-            export_comm_mat = true;
-        }
-        else {
-            export_comm_mat = false;
-        }
-
         // Initialize communication matrix
         comm_mat = (size_t **) malloc(num_local_procs * sizeof (size_t *));
         //prev_comm_mat = (size_t **) malloc(num_local_procs * sizeof (size_t *));
@@ -736,18 +746,22 @@ void reset_prev_comm_mat() {
     }
 }
 
-void stop_deloc() {
+void stop_deloc(size_t* pml_counter) {
     //char info_shm[16];
+    if (export_comm_mat == true) {
+        //deloc_pml_output(pml_counter);
+        dump_my_comm_mat(shm_name_mat, pml_counter, num_local_procs);
+    }
+
     if (deloc_enabled == 1) {
         stopDelocMon = true;
         // Update the last state of comm. matrix
         //update_commmat_shm(pInfo->shm_name, pml_events, num_local_procs);
-        /*   
+           
         while (is_thread_running == true) {
             // wait for main thread finished
-            //sleep(1);
-            usleep(100000); //100 ms
-        }*/
+            usleep(200000);
+        }
         //del_shm(pInfo->shm_name);
         //snprintf(info_shm, 16, "DELOC-t-%d", pInfo->local_rank);
         //del_shm(info_shm);
@@ -931,6 +945,19 @@ void update_commmat_shm(const char *shm_name, size_t *data, int np) {
     } else {
         printf("Err: failed writing to shm\n");
     }
+}
+
+void dump_my_comm_mat(const char *shm_name, size_t *data, int np) {
+    FILE *fp;
+    char fname[SHM_N_LEN+2];
+    sprintf(fname, "%s.m", shm_name);
+    fp = fopen(fname, "w+");
+    fprintf(fp, "%lu", data[0]);
+    for (int i = 1; i < np; i++) {
+        fprintf(fp, ",%lu", data[i]);
+    }      
+    fprintf(fp, "\n");
+    fclose(fp);
 }
 
 void del_shm(const char *shm_name) {
@@ -1405,7 +1432,7 @@ void save_comm_mat_to_file(int nbtasks, const char* out_filename) {
     int i, j;
     FILE *of = fopen(out_filename, "w");
 
-    i = nbtasks - 1;
+    //i = nbtasks - 1;
     for (i = nbtasks - 1; i >= 0; i--) {
         fprintf(of, "%lu", comm_mat[i][0]);
         for (j = 1; j < nbtasks; j++) {

@@ -104,7 +104,7 @@ bool is_thread_running;
 bool export_comm_mat;
 bool silent_mode;
 
-OMPI_DECLSPEC void stop_deloc(void );
+OMPI_DECLSPEC void stop_deloc(size_t * pml_counter );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
 OMPI_DECLSPEC void map_proc(__pid_t pid, int core_id);
 OMPI_DECLSPEC void map_rank(unsigned rank_id, int core_id);
@@ -188,6 +188,8 @@ OMPI_DECLSPEC void update_my_pid_shm(void );
 OMPI_DECLSPEC void get_all_pids_shm(void );
 OMPI_DECLSPEC bool is_deloc_enabled(void );
 OMPI_DECLSPEC void get_numa_cpus_phi_26(void );
+OMPI_DECLSPEC void dump_my_comm_mat(const char *shm_name, size_t *data, int np);
+
 
 END_C_DECLS
 
