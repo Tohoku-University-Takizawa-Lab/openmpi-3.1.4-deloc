@@ -120,6 +120,8 @@ void * monitor_exec_measure(void *args) {
                 //map_deloc_tl();
                 //map_balance();
                 //map_locality();
+
+                print_task_core();
             
                 // Get the PIDs
                 if (num_pids < num_tasks) {
@@ -462,6 +464,8 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
     deloc_enabled = 1;
     
     // Update my process id to shm
+    //printf("[DeLoc-%d] pid: %d, current_pu: %d\n", proc_info.my_local_rank,
+    //        proc_info.pid, sched_getcpu());
     update_my_pid_shm();
 
     /* Set global environment settings */
@@ -685,9 +689,10 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
             }
             printf("[DeLoc] Poll interval: %lu (max=%lu) microsecs, max_count: %d\n", pollInterval,
                      pollIntervalMax, pollNMax);
+            printf("[DeLoc] Number of tasks=%d, number of pairs=%d, pairs_eq_ratio=%.1f\n", num_tasks,
+                     npairs, pairs_equal_ratio);
             printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n",
                     num_nodes, num_pus, num_cores, num_pus/num_nodes);
-            printf("[DeLoc] Number of tasks=%d, number of pairs=%d\n", num_tasks, npairs);
     
             printf("[NUMACTL] (Node IDs):(Physical core IDs)\n");
             for (i = 0; i < num_cores; i++) {
@@ -1289,7 +1294,8 @@ void print_node_cpus() {
 
 void print_task_core() {
     for (int i = 0; i < num_tasks; i++) {
-        printf("\tTask-%d => core-%d\n", i, task_core[i]);
+        printf("\tTask-%d => core-%d (pu-%d)\n", i, task_core[i],
+                numa_cores[task_core[i]]);
     }
 }
 
