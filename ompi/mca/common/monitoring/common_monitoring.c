@@ -245,7 +245,7 @@ void mca_common_monitoring_finalize( void )
     opal_output_close(mca_common_monitoring_output_stream_id);
     free(mca_common_monitoring_output_stream_obj.lds_prefix);
     /* Stop deloc before pml_data is cleared */
-    stop_deloc(pml_count);
+    stop_deloc();
     /* Free internal data structure */
     free(pml_data);  /* a single allocation */
     opal_hash_table_remove_all( common_monitoring_translation_ht );

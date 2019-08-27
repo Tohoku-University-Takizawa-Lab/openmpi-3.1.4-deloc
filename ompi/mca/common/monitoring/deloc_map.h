@@ -77,7 +77,8 @@ int npairs;
 int npairs_prev;
 int ntasks_prev;
 float pairs_equal_ratio;
-int diff_lim;
+int mapping_diff_threshold;
+//int diff_lim;
 int tasks_diff_lim;
 pid_map_t proc_pid_maps;
 unsigned *cur_mapping;
@@ -87,7 +88,9 @@ __pid_t *task_pids;
 // Polling interval in microseconds
 unsigned long pollInterval;
 int pollNMax;
+int mapNMax;
 unsigned long pollIntervalMax;
+unsigned long pollIntervalMin;
 float slope_m, slope_n;
 unsigned deloc_enabled;
 unsigned time_measured;
@@ -98,13 +101,20 @@ int n_comm_changed;
 double poll_time_used;
 // Duration for computing the maping
 double mapping_time_used;
+// Duration for compare and update
+double mat_update_time_used;
+// Number of polling taken
+int n_poll;
 // Flag to monitor thread
 bool is_thread_running;
 // Flag to export the last matrix to file
 bool export_comm_mat;
+bool export_comm_mat_part;
 bool silent_mode;
+// Object refers to PML counter
+size_t * pml_meter;
 
-OMPI_DECLSPEC void stop_deloc(size_t * pml_counter );
+OMPI_DECLSPEC void stop_deloc(void );
 OMPI_DECLSPEC void get_proc_info(orte_proc_info_t orte_proc_info);
 OMPI_DECLSPEC void map_proc(__pid_t pid, int core_id);
 OMPI_DECLSPEC void map_rank(unsigned rank_id, int core_id);
@@ -123,6 +133,8 @@ OMPI_DECLSPEC void get_proc_affinity(__pid_t pid);
 OMPI_DECLSPEC void deloc_pml_output(size_t * pml_arr);
 void *monitor_exec(void *args);
 void *monitor_exec_measure(void *args);
+void *monitor_exec_cmp_measure(void *args);
+void *monitor_exec_cmp(void *args);
 
 // DeLocMap
 //int num_tasks, num_nodes, num_cores, n_cores_per_node;
@@ -148,6 +160,7 @@ OMPI_DECLSPEC int map_to_next_core(int node_id, int task_id);
 OMPI_DECLSPEC void map_deloc(void );
 OMPI_DECLSPEC void map_deloc_tl(void );
 OMPI_DECLSPEC void map_deloc_if(void );
+OMPI_DECLSPEC void map_deloc_tl_if(void );
 OMPI_DECLSPEC void map_balance(void );
 OMPI_DECLSPEC void map_locality(void );
 OMPI_DECLSPEC void map_rr_node(void );
@@ -188,7 +201,8 @@ OMPI_DECLSPEC void update_my_pid_shm(void );
 OMPI_DECLSPEC void get_all_pids_shm(void );
 OMPI_DECLSPEC bool is_deloc_enabled(void );
 OMPI_DECLSPEC void get_numa_cpus_phi_26(void );
-OMPI_DECLSPEC void dump_my_comm_mat(const char *shm_name, size_t *data, int np);
+OMPI_DECLSPEC void dump_my_comm_mat(const char *shm_name, size_t *counter, int np);
+OMPI_DECLSPEC int compare_curr_prev_mapping(void );
 
 
 END_C_DECLS

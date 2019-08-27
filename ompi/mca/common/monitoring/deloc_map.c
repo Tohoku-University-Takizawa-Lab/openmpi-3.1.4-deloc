@@ -31,7 +31,7 @@
 #define DELAY_STEP          500000
 #define DELAY_STEP_MAX      1000000
 #define INTERVAL_MAX_DEF    10000000
-#define INTERVAL_MIN        500000
+#define INTERVAL_MIN_DEF       500000
 #define SIZE_POLL_ITV       sizeof(unsigned long)
 #define SIZE_PID            sizeof(__pid_t)
 #define MAX_RECORD_ITV      24
@@ -51,8 +51,8 @@ void deloc_pml_output(size_t *pml_arr) {
     update_commmat_shm(shm_name_mat, pml_arr, num_local_procs);
 }
 
-void * monitor_exec_measure(void *args) {
-    int i, n_poll, mat_size, diff;//, diff2;//, j;
+void * monitor_exec_cmp_measure(void *args) {
+    int i, mat_size, diff;//, diff2;//, j;
     struct timespec start, end;
     size_t *pml_data = (size_t *) args;
     mat_size = sizeof (size_t) * num_local_procs;
@@ -61,7 +61,217 @@ void * monitor_exec_measure(void *args) {
     n_poll = 0;
     is_thread_running = true;
     delay_poll(pollInterval); // First wait
-    //usleep(pollInterval); // First wait
+    while (!stopDelocMon && n_poll < pollNMax) {
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        
+        update_commmat_shm(shm_name_mat, pml_data, num_local_procs);
+        
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        poll_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
+
+        // Delay to let all of the task finish updating
+        usleep(MASTER_DELAY);
+        // Get the data from shm
+        if (proc_info.my_local_rank == DELOC_MASTER && n_comm_changed < mapNMax) {
+            //usleep(MASTER_DELAY);
+            clock_gettime(CLOCK_MONOTONIC, &start);
+            // Update comm. matrix
+            get_all_commmat_shm(mat_size);
+            //comm_mat_to_pairs(comm_mat, pairs);
+            comm_mat_to_pairs_tasks(comm_mat, pairs, task_loads);
+
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            mat_update_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
+            
+            clock_gettime(CLOCK_MONOTONIC, &start);
+    
+            qsort(pairs, npairs, sizeof (struct pair), compare_pair);
+            map_deloc_if();
+            
+            //qsort(task_loads, num_tasks, sizeof (struct loadObj), compare_loadObj_rev);
+            //map_deloc_tl_if();
+
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            mapping_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
+            
+            diff = compare_curr_prev_mapping();
+            //printf("[DeLoc] compare_mapping(0=same)=%d\n", diff);
+            
+            bool poll_itv_changed = false;
+            if (diff <= mapping_diff_threshold) {
+                if (pollIntervalMax == 0 || pollInterval < pollIntervalMax) {
+                    pollInterval *= slope_m;
+                    poll_itv_changed = true;
+                }
+            }
+            else {
+                //clock_gettime(CLOCK_MONOTONIC, &start);
+
+                if (pollIntervalMin > 0 && pollInterval > pollIntervalMin) {
+                    pollInterval *= slope_n;
+                    poll_itv_changed = true;
+                }
+                //map_deloc_if();
+                //map_deloc();
+                //map_deloc_tl();
+                //map_balance();
+                //map_locality();
+
+                //print_task_core();
+            
+                // Get the PIDs
+                if (num_pids < num_tasks) {
+                    //get_all_task_shm();
+                    get_all_pids_shm();
+                }
+
+                // Enforce the mapping
+                // Array based implementation
+                for (i = 0; i < num_tasks; i++) {
+                    //printf("Task-%d: pid #%d ", i, task_pids[i]);
+                    if (task_core[i] != task_core_prev[i]) {
+                        map_proc(task_pids[i], task_core[i]);
+                    }
+                }
+                //clock_gettime(CLOCK_MONOTONIC, &end);
+                //mapping_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
+               
+                // Save current map to prev
+                update_task_core_prev();
+            
+                n_comm_changed++;
+                if (export_comm_mat_part == true)
+                    save_comm_mat_part(num_tasks, n_poll);
+            }
+            if (poll_itv_changed == true) {
+                update_poll_itv_shm(pollInterval);
+            }
+        }
+        else if (proc_info.my_local_rank == DELOC_MASTER && n_comm_changed >= mapNMax) {
+            // Update interval to stop flag
+            update_poll_itv_shm(0);
+        }
+ 
+        if (n_poll < MAX_RECORD_ITV) {
+            itvs[n_poll] = pollInterval;
+        }
+        n_poll++;
+
+        get_poll_itv_shm();
+        if (pollInterval > 0 ) {
+            delay_poll(pollInterval);
+        }
+        else {
+           stopDelocMon = true;
+        }
+    }
+    is_thread_running = false;
+    //if (pInfo->local_rank == DELOC_MASTER) {
+    if (proc_info.my_local_rank == DELOC_MASTER) {
+        printf("[DeLoc] Mapping intervals=[ ");
+        for (i = 0; i < MAX_RECORD_ITV; i++) {
+            printf("%d ", itvs[i]);
+        }
+        printf("]\n");
+        free(itvs);
+    }
+    pthread_exit(NULL);
+}
+
+void * monitor_exec_cmp(void *args) {
+    int i, mat_size, diff;//, diff2;//, j;
+    size_t *pml_data = (size_t *) args;
+    mat_size = sizeof (size_t) * num_local_procs;
+
+    n_poll = 0;
+    is_thread_running = true;
+    delay_poll(pollInterval); // First wait
+    while (!stopDelocMon && n_poll < pollNMax) {
+        
+        update_commmat_shm(shm_name_mat, pml_data, num_local_procs);
+        
+        // Delay to let all of the task finish updating
+        usleep(MASTER_DELAY);
+        // Get the data from shm
+        if (proc_info.my_local_rank == DELOC_MASTER && n_comm_changed < mapNMax) {
+            //usleep(MASTER_DELAY);
+            // Update comm. matrix
+            get_all_commmat_shm(mat_size);
+            //comm_mat_to_pairs(comm_mat, pairs);
+            comm_mat_to_pairs_tasks(comm_mat, pairs, task_loads);
+
+            qsort(pairs, npairs, sizeof (struct pair), compare_pair);
+            map_deloc_if();
+            
+            //qsort(task_loads, num_tasks, sizeof (struct loadObj), compare_loadObj_rev);
+            //map_deloc_tl_if();
+
+            diff = compare_curr_prev_mapping();
+            
+            bool poll_itv_changed = false;
+            if (diff <= mapping_diff_threshold) {
+                if (pollIntervalMax == 0 || pollInterval < pollIntervalMax) {
+                    pollInterval *= slope_m;
+                    poll_itv_changed = true;
+                }
+            }
+            else {
+                if (pollIntervalMin > 0 && pollInterval > pollIntervalMin) {
+                    pollInterval *= slope_n;
+                    poll_itv_changed = true;
+                }
+
+                // Get the PIDs
+                if (num_pids < num_tasks) {
+                    //get_all_task_shm();
+                    get_all_pids_shm();
+                }
+
+                // Enforce the mapping
+                // Array based implementation
+                for (i = 0; i < num_tasks; i++) {
+                    if (task_core[i] != task_core_prev[i]) {
+                        map_proc(task_pids[i], task_core[i]);
+                    }
+                }
+                // Save current map to prev
+                update_task_core_prev();
+
+                n_comm_changed++;
+            }
+            if (poll_itv_changed == true) {
+                update_poll_itv_shm(pollInterval);
+            }
+        }
+        else if (proc_info.my_local_rank == DELOC_MASTER && n_comm_changed >= mapNMax) {
+            // Update interval to stop flag
+            update_poll_itv_shm(0);
+        }
+ 
+        n_poll++;
+
+        get_poll_itv_shm();
+        if (pollInterval > 0 ) {
+            delay_poll(pollInterval);
+        }
+        else {
+           stopDelocMon = true;
+        }
+    }
+    is_thread_running = false;
+    pthread_exit(NULL);
+}
+
+void * monitor_exec_measure(void *args) {
+    int i, mat_size, diff;//, diff2;//, j;
+    struct timespec start, end;
+    size_t *pml_data = (size_t *) args;
+    mat_size = sizeof (size_t) * num_local_procs;
+    int *itvs = (int *) malloc(MAX_RECORD_ITV * sizeof (int));
+
+    n_poll = 0;
+    is_thread_running = true;
+    delay_poll(pollInterval); // First wait
     while (!stopDelocMon && n_poll < pollNMax) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         
@@ -70,14 +280,14 @@ void * monitor_exec_measure(void *args) {
         update_commmat_shm(shm_name_mat, pml_data, num_local_procs);
         
         clock_gettime(CLOCK_MONOTONIC, &end);
-        poll_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+        poll_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
 
+        // Delay to let all of the task finish updating
+        usleep(MASTER_DELAY);
         // Get the data from shm
         //if (pInfo->local_rank == DELOC_MASTER) {
-        if (proc_info.my_local_rank == DELOC_MASTER) {
-            // Delay to let all of the task finish updating
-            //usleep(150000);
-            usleep(MASTER_DELAY);
+        if (proc_info.my_local_rank == DELOC_MASTER && n_comm_changed < mapNMax) {
+            //usleep(MASTER_DELAY);
             
             clock_gettime(CLOCK_MONOTONIC, &start);
             // Update comm. matrix
@@ -93,6 +303,8 @@ void * monitor_exec_measure(void *args) {
             //diff = compare_update_pairs(pairs, pairs_prev, npairs_prev);
             //diff2 = compare_update_task_most(task_loads, task_loads_prev, num_tasks);
             //print_pairs(pairs, npairs);
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            mat_update_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
             
             /* for deloc_tl and balance */
             /* 
@@ -106,14 +318,19 @@ void * monitor_exec_measure(void *args) {
             // make interval longer
             //printf("[DeLoc] diff1=%d, diff2=%d\n", diff, diff2);
             //if (diff < n_cores_per_node) {
-            if (diff < tasks_diff_lim){
-                if (pollInterval < pollIntervalMax){
+            bool poll_itv_changed = false;
+            if (diff < tasks_diff_lim) {
+                if (pollIntervalMax == 0 || pollInterval < pollIntervalMax) {
                     pollInterval *= slope_m;
+                    poll_itv_changed = true;
                 }
             }
             else {
-                if (pollInterval > INTERVAL_MIN) {
+                clock_gettime(CLOCK_MONOTONIC, &start);
+
+                if (pollIntervalMin > 0 && pollInterval > pollIntervalMin) {
                     pollInterval *= slope_n;
+                    poll_itv_changed = true;
                 }
                 map_deloc_if();
                 //map_deloc();
@@ -121,13 +338,15 @@ void * monitor_exec_measure(void *args) {
                 //map_balance();
                 //map_locality();
 
-                print_task_core();
+                //print_task_core();
             
                 // Get the PIDs
                 if (num_pids < num_tasks) {
                     //get_all_task_shm();
                     get_all_pids_shm();
                 }
+
+                //printf("[DeLoc] compare_mapping()=%d\n", compare_curr_prev_mapping());
                 
                 // Enforce the mapping
                 // Array based implementation
@@ -142,26 +361,43 @@ void * monitor_exec_measure(void *args) {
                 update_task_core_prev();
             
                 clock_gettime(CLOCK_MONOTONIC, &end);
-                mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+                mapping_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
                 n_comm_changed++;
-                save_comm_mat_part(num_tasks, n_poll);
+
+                if (export_comm_mat_part == true)
+                    save_comm_mat_part(num_tasks, n_poll);
+            }
+            if (poll_itv_changed == true) {
+                update_poll_itv_shm(pollInterval);
             }
         }
+        else if (proc_info.my_local_rank == DELOC_MASTER && n_comm_changed >= mapNMax) {
+            // Update interval to stop flag
+            update_poll_itv_shm(0);
+        }
+ 
         if (n_poll < MAX_RECORD_ITV) {
             itvs[n_poll] = pollInterval;
         }
         n_poll++;
-        delay_poll(pollInterval);
-        //usleep(pollInterval);
+
+        get_poll_itv_shm();
+        if (pollInterval > 0 ) {
+            delay_poll(pollInterval);
+        }
+        else {
+           stopDelocMon = true;
+        }
     }
     is_thread_running = false;
     //if (pInfo->local_rank == DELOC_MASTER) {
     if (proc_info.my_local_rank == DELOC_MASTER) {
-        printf("[DeLoc] Mapping intervals:");
-        for (i = 0; i < n_poll; i++) {
+        printf("[DeLoc] Mapping intervals=[");
+        for (i = 0; i < MAX_RECORD_ITV; i++) {
             printf(" %d", itvs[i]);
         }
-        putchar('\n');
+        printf("]\n");
+        free(itvs);
     }
     pthread_exit(NULL);
 }
@@ -199,7 +435,7 @@ void delay_poll(const unsigned long itv) {
 }
 
 void * monitor_exec(void *args) {
-    int i, n_poll, mat_size, diff;//, diff2;//, j;
+    int i, mat_size, diff;//, diff2;//, j;
     //struct timespec req = {0};
     size_t *pml_data = (size_t *) args;
     mat_size = sizeof (size_t) * num_local_procs;
@@ -235,11 +471,7 @@ void * monitor_exec(void *args) {
         usleep(MASTER_DELAY);
         // Get the data from shm
         //if (pInfo->local_rank == DELOC_MASTER) {
-        if (proc_info.my_local_rank == DELOC_MASTER) {
-            // Delay to let all of the task finish updating
-            //usleep(150000);
-            //usleep(1000000);
-            //usleep(MASTER_DELAY);
+        if (proc_info.my_local_rank == DELOC_MASTER && n_comm_changed < mapNMax) {
             //size_t **shmem_comm = (size_t*) malloc(sizeof(size_t) * nprocs_world);
             //size_t shmem_comm[nprocs_world][nprocs_world];
             /*size_t **shmem_comm = (size_t **)malloc(nprocs_world * sizeof(size_t *)); 
@@ -318,6 +550,7 @@ void * monitor_exec(void *args) {
             //printf("[DeLoc] diff=%d, lim=%d\n", diff, diff_lim);
             //if (diff < n_cores_per_node) {
             //if (diff < tasks_diff_lim) {
+            bool poll_itv_changed = false;
             if (diff < tasks_diff_lim) {
                 //printf("** Comm. does not change, skipped mapping\n");
                 //print_pairs(pairs,npairs);
@@ -325,15 +558,18 @@ void * monitor_exec(void *args) {
 
                 // Slowage the polling
                 //printf("\tCurrent PollInterval: %d us\n", pollInterval);
-                if (pollInterval < pollIntervalMax){
+                //if (pollInterval < pollIntervalMax){
+                if (pollIntervalMax == 0 || pollInterval < pollIntervalMax){
                     pollInterval *= slope_m;
+                    poll_itv_changed = true;
                 }
                 //pollInterval *= slope_m;
                 //continue;
             }
             else {
-                if (pollInterval > INTERVAL_MIN) {
+                if (pollIntervalMin > 0 && pollInterval > pollIntervalMin) {
                     pollInterval *= slope_n;
+                    poll_itv_changed = true;
                 }
                 map_deloc_if();
                 //map_deloc();
@@ -406,14 +642,25 @@ void * monitor_exec(void *args) {
             //mapping_time_used += (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1000000.0;
                 n_comm_changed++;
             }
-            update_poll_itv_shm(pollInterval);
+            if (poll_itv_changed == true) {
+                update_poll_itv_shm(pollInterval);
+            }
+        }
+        else if (proc_info.my_local_rank == DELOC_MASTER && n_comm_changed >= mapNMax) {
+            // Update interval to stop flag
+            update_poll_itv_shm(0);
         }
         n_poll++;
         //usleep(pollInterval);
         //usleep(pollInterval); // First wait
         get_poll_itv_shm();
         //printf("[DeLoc-%d] Current PollInterval: %lu us\n", proc_info.my_local_rank, pollInterval);
-        delay_poll(pollInterval);
+        if (pollInterval > 0 ) {
+            delay_poll(pollInterval);
+        }
+        else {
+           stopDelocMon = true; 
+        }
         //req.tv_sec = 0;
         //req.tv_nsec = pollInterval * 1000000L;
         //nanosleep(&req, (struct timespec *) NULL); // First wait
@@ -426,7 +673,7 @@ void * monitor_exec(void *args) {
 
 void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_data) {
     int i, j;
-    size_t *pml_meter;
+    //size_t *pml_meter;
 
     //const char* env_deloc_enable = getenv("DELOC_ENABLED");
     //if (env_deloc_enable != NULL && atoi(env_deloc_enable) == 0) {
@@ -456,6 +703,24 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         export_comm_mat = false;
     }
     
+    const char* env_export_part_mat = getenv("DELOC_EXPORT_PARTIAL_MAT");
+    if (env_export_part_mat != NULL && atoi(env_export_part_mat) == 1) {
+        export_comm_mat_part = true;
+    }
+    else {
+        export_comm_mat_part = false;
+    }
+    
+    const char* env_use_pml_data = getenv("DELOC_USE_DATA_SIZE");
+    if (env_use_pml_data != NULL && atoi(env_use_pml_data) == 1) {
+       pml_meter = pml_data;
+       if (proc_info.my_local_rank == DELOC_MASTER)
+            printf("[DeLoc] Using data size as counter (pml_data)\n");
+    }
+    else {
+       pml_meter = pml_count;
+    }
+    
     const char* env_deloc_enable = getenv("DELOC_ENABLED");
     if (env_deloc_enable != NULL && atoi(env_deloc_enable) == 0) {
         deloc_enabled = 0;
@@ -469,13 +734,14 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
     update_my_pid_shm();
 
     /* Set global environment settings */
-    const char* env_use_pml_data = getenv("DELOC_USE_DATA_SIZE");
-    if (env_use_pml_data != NULL && atoi(env_use_pml_data) == 1) {
-        pml_meter = pml_data;
-    }
-    else {
-        pml_meter = pml_count;
-    }
+    //const char* env_use_pml_data = getenv("DELOC_USE_DATA_SIZE");
+    //if (env_use_pml_data != NULL && atoi(env_use_pml_data) == 1) {
+    //if (use_data_size) {
+    //    pml_meter = pml_data;
+    //}
+    //else {
+    //    pml_meter = pml_count;
+    //}
     // Set Polling interval (in us)    
     const char* env_poll_itv = getenv("DELOC_POLL_INTERVAL");
     if (env_poll_itv != NULL) {
@@ -494,7 +760,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
     else {
         pollNMax = 9999;
     }
-    
+
     // Initialize delta pml data
     //prev_pml_data = (size_t *) malloc(num_local_procs * sizeof (size_t));
     //for (i = 0; i < num_local_procs; i++) {
@@ -524,6 +790,14 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         else {
             pollIntervalMax = INTERVAL_MAX_DEF;
         }
+        const char* env_itv_min = getenv("DELOC_POLL_INTERVAL_MIN");
+        if (env_itv_min != NULL) {
+            pollIntervalMin = atoi(env_itv_min);
+        }
+        else {
+            pollIntervalMin = INTERVAL_MIN_DEF;
+        }
+        //printf("[DeLoc] Poll interval: %lu (max=%lu) microsecs, max_count: %d\n", pollInterval,
         //printf("[DeLoc] Poll interval: %lu (max=%lu) microsecs, max_count: %d\n", pollInterval,
         //         pollIntervalMax, pollNMax);
     
@@ -534,6 +808,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         else {
             pairs_equal_ratio = 0.5;
         }
+        
         const char* env_slope_m = getenv("DELOC_SLOPE_M");
         const char* env_slope_n = getenv("DELOC_SLOPE_N");
         if (env_slope_m != NULL && env_slope_n != NULL) {
@@ -546,6 +821,15 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
             slope_m = 1.5;
             slope_n = 0.7;
         }
+        
+        const char* env_map_max = getenv("DELOC_MAP_N_MAX");
+        if (env_map_max != NULL) {
+            mapNMax = atoi(env_map_max);
+        }
+        else {
+            mapNMax = 9999;
+        }
+    
     
         // Initialize communication matrix
         comm_mat = (size_t **) malloc(num_local_procs * sizeof (size_t *));
@@ -591,7 +875,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
 
         //npairs_prev = num_tasks * pairs_equal_ratio;
         npairs_prev = num_tasks * 1.4;  // diagonal
-        diff_lim = npairs_prev * pairs_equal_ratio;
+        //diff_lim = npairs_prev * pairs_equal_ratio;
         pairs_prev = (struct pair *) malloc(npairs_prev * sizeof (struct pair));
         ntasks_prev = num_tasks * 0.5;
         tasks_diff_lim = ntasks_prev * (1-pairs_equal_ratio);
@@ -606,6 +890,14 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         if (num_cores % num_nodes > 0) {
             n_cores_per_node++;
             num_cores = n_cores_per_node * 2;
+        }
+        
+        const char* env_map_diff_ratio = getenv("DELOC_MAP_DIFF_RATIO");
+        if (env_map_diff_ratio != NULL) {
+            mapping_diff_threshold = atof(env_map_diff_ratio) * num_tasks;   
+        }
+        else {
+            mapping_diff_threshold = num_tasks / num_nodes;
         }
 
         num_pids = 0;
@@ -671,7 +963,6 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         }
 
         n_comm_changed = 0;
-        mapping_time_used = 0;
 
         /*
         comm_mat_to_task_loads(comm_mat, task_loads);
@@ -684,13 +975,14 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         if (silent_mode == false) {
             //printf("/** On-DeLoc Information **/\n"
             //       "\tNumber of nodes: %d\n"
-            if (pml_meter == pml_data) {
-                printf("[DeLoc] Using pml_data (size)\n");
-            }
-            printf("[DeLoc] Poll interval: %lu (max=%lu) microsecs, max_count: %d\n", pollInterval,
-                     pollIntervalMax, pollNMax);
-            printf("[DeLoc] Number of tasks=%d, number of pairs=%d, pairs_eq_ratio=%.1f\n", num_tasks,
-                     npairs, pairs_equal_ratio);
+            //if (pml_meter == pml_data) {
+            //if (use_data_size) {
+            //    printf("[DeLoc] Using pml_data (size)\n");
+            //}
+            printf("[DeLoc] Poll interval: %lu (%lu-%lu) microsecs, max_count: %d, max_n_map: %d\n", pollInterval,
+                     pollIntervalMin, pollIntervalMax, pollNMax, mapNMax);
+            printf("[DeLoc] Number of tasks=%d, number of pairs=%d, pairs_eq_ratio=%.1f, mapping_diff_threshold=%d\n",
+                    num_tasks, npairs, pairs_equal_ratio, mapping_diff_threshold);
             printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n",
                     num_nodes, num_pus, num_cores, num_pus/num_nodes);
     
@@ -710,7 +1002,6 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         }
     }
     stopDelocMon = false;
-    poll_time_used = 0; 
 
 
     //    for (int i = 0; i < num_local_procs; i++) {
@@ -726,11 +1017,18 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
     const char* env_measure = getenv("DELOC_MEASURE_TIME");
     if (env_measure != NULL && atoi(env_measure) > 0) {
         time_measured = 1;
-        pthread_create(&delocThread, NULL, monitor_exec_measure, (void *) pml_meter);
+        // Initialize time counter
+        mapping_time_used = 0;
+        mat_update_time_used = 0;
+        poll_time_used = 0; 
+
+        //pthread_create(&delocThread, NULL, monitor_exec_measure, (void *) pml_meter);
+        pthread_create(&delocThread, NULL, monitor_exec_cmp_measure, (void *) pml_meter);
     }
     else {
         time_measured = 0;
-        pthread_create(&delocThread, NULL, monitor_exec, (void *) pml_meter);
+        //pthread_create(&delocThread, NULL, monitor_exec, (void *) pml_meter);
+        pthread_create(&delocThread, NULL, monitor_exec_cmp, (void *) pml_meter);
     }
 }
 
@@ -751,11 +1049,13 @@ void reset_prev_comm_mat() {
     }
 }
 
-void stop_deloc(size_t* pml_counter) {
+void stop_deloc() {
     //char info_shm[16];
+    // If deloc tracing is disabled,
+    // this will dump the last flushed of the MCA monitoring
     if (export_comm_mat == true) {
         //deloc_pml_output(pml_counter);
-        dump_my_comm_mat(shm_name_mat, pml_counter, num_local_procs);
+        dump_my_comm_mat(shm_name_mat, pml_meter, num_local_procs);
     }
 
     if (deloc_enabled == 1) {
@@ -776,17 +1076,14 @@ void stop_deloc(size_t* pml_counter) {
 
         if (time_measured == 1) {
             //printf("[DeLoc-%d],elapsed_time,update_comm(),%f,ms\n", pInfo->local_rank, poll_time_used);
-            printf("[DeLoc-%d],elapsed_time,update_comm(),%f,ms\n",
-                        proc_info.my_local_rank, poll_time_used);
+            printf("[DeLoc-%d],MEASURE,time(update_comm),%f,n_poll,%d\n",
+                        proc_info.my_local_rank, poll_time_used, n_poll);
         }
 
          //printf("[DeLoc-%d] Cleaning up..\n", pInfo->local_rank);
         //free(prev_pml_data);
         //if (pInfo->local_rank == DELOC_MASTER) {
         if (proc_info.my_local_rank == DELOC_MASTER) {
-            if (time_measured == 1) {
-                printf("[DeLoc-%d],elapsed_time,map(),%f,ms\n", DELOC_MASTER, mapping_time_used);
-            }
             // Save the last state of comm. matrix
             //get_all_commmat_shm(sizeof (size_t) * num_local_procs);
             //print_comm_mat(comm_mat);
@@ -794,6 +1091,10 @@ void stop_deloc(size_t* pml_counter) {
                 save_comm_mat(num_tasks);
             }
 
+            if (time_measured == 1) {
+                printf("[DeLoc-%d],MEASURE,time(map),%f,time(mat_update),%f,n_apply,%d\n",
+                  DELOC_MASTER, mapping_time_used, mat_update_time_used, n_comm_changed);
+            }
             // Always print this information
             printf("[DeLoc] Mapping was applied %d time(s).\n", n_comm_changed);
             // Cleanup
@@ -952,17 +1253,27 @@ void update_commmat_shm(const char *shm_name, size_t *data, int np) {
     }
 }
 
-void dump_my_comm_mat(const char *shm_name, size_t *data, int np) {
+void dump_my_comm_mat(const char *shm_name, size_t *counter, int np) {
     FILE *fp;
     char fname[SHM_N_LEN+2];
     sprintf(fname, "%s.m", shm_name);
     fp = fopen(fname, "w+");
-    fprintf(fp, "%lu", data[0]);
+    fprintf(fp, "%lu", counter[0]);
     for (int i = 1; i < np; i++) {
-        fprintf(fp, ",%lu", data[i]);
+        fprintf(fp, ",%lu", counter[i]);
     }      
     fprintf(fp, "\n");
     fclose(fp);
+    /*
+    if (deloc_enabled) {
+        sprintf(fname, "%s.s.m", shm_name);
+        fprintf(fp, "%lu", data[0]);
+        for (int i = 1; i < np; i++) {
+            fprintf(fp, ",%lu", data[i]);
+        }      
+        fprintf(fp, "\n");
+        fclose(fp);
+    }*/
 }
 
 void del_shm(const char *shm_name) {
@@ -1447,7 +1758,8 @@ void save_comm_mat_to_file(int nbtasks, const char* out_filename) {
         fprintf(of, "\n");
     }
     fclose(of);
-    printf("Saved comm. matrix to %s\n", out_filename);
+    printf("[DeLoc-%d] Saved communication matrix to %s\n",
+           proc_info.my_local_rank, out_filename);
 }
 
 void save_comm_mat_part(int nbtasks, int part) {
@@ -1576,6 +1888,20 @@ int compare_update_task_most(struct loadObj *cur, struct loadObj *prev,
     //free(tmp);
     //printf("Finished compare update task most..\n");
     //return diff;
+}
+
+int compare_curr_prev_mapping() {
+    int diff = 0;
+    for (int i = 0; i < num_tasks; i++) {
+        //printf(" Task-%d: %d (%d:%d) <> %d (%d:%d)\n", i, task_core[i], numa_cores_node[task_core[i]],
+        //    numa_cores[task_core[i]], task_core_prev[i], numa_cores_node[task_core_prev[i]],
+        //    numa_cores[task_core_prev[i]]);
+        //diff += abs(numa_cores_node[task_core[i]] - numa_cores_node[task_core_prev[i]]);
+        diff += (numa_cores_node[task_core[i]] != numa_cores_node[task_core_prev[i]]);
+    }
+
+    //printf("** Mapping diff: %d\n", diff);
+    return diff;
 }
 
 int map_to_next_core(int node_id, int task_id) {
@@ -1744,6 +2070,38 @@ void map_deloc_if() {
     }
 }
 
+void map_deloc_tl_if() {
+    int t, n, target_node;
+    size_t avg_load;
+    
+    reset_node_core_start();
+    reset_node_loads();
+    
+    avg_load = 0;
+    for (t = 0; t < num_tasks; t++) {
+        avg_load += task_loads[t].load;
+    }
+    avg_load = avg_load / num_nodes;
+
+    //qsort(task_loads, num_tasks, sizeof (struct loadObj), compare_loadObj_rev);
+    t = 0;
+    n = 0;
+    while (t < num_tasks) {
+        n = numa_cores_node[task_core_prev[t]];
+        if (node_loads[n].load >= avg_load) {
+            n = next_node(n);
+        }
+       
+        target_node = map_to_next_core(n, task_loads[t].id);
+        node_loads[target_node].load += task_loads[t].load;
+        //if (node_loads[n].load >= avg_load) {
+        //    n = next_node(n);
+       // }
+        t++;
+    }
+}
+
+//
 void map_balance() {
     int t, n;
     /*
