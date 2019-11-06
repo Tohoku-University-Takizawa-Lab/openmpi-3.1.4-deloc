@@ -164,6 +164,8 @@ OMPI_DECLSPEC void map_deloc_tl_if(void );
 OMPI_DECLSPEC void map_balance(void );
 OMPI_DECLSPEC void map_locality(void );
 OMPI_DECLSPEC void map_rr_node(void );
+OMPI_DECLSPEC void map_packed(void );
+OMPI_DECLSPEC void map_numa_balanced(void );
 OMPI_DECLSPEC int compare_pair(const void * a, const void * b);
 OMPI_DECLSPEC int compare_task(const void *a, const void *b);
 OMPI_DECLSPEC int compare_loadObj(const void *a, const void *b);

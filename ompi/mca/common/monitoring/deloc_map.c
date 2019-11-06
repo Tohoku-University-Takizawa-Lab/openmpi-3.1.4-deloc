@@ -829,7 +829,15 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         else {
             mapNMax = 9999;
         }
-    
+
+        bool balanceMapInit;
+        const char* env_start_bal = getenv("DELOC_START_BALANCE");
+        if (env_start_bal != NULL && atoi(env_start_bal) == 1) {
+            balanceMapInit = true; 
+        }
+        else {
+            balanceMapInit = false;
+        }
     
         // Initialize communication matrix
         comm_mat = (size_t **) malloc(num_local_procs * sizeof (size_t *));
@@ -861,6 +869,8 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         if (num_nodes <= 0) {
             num_nodes = hwloc_get_nbobjs_by_type(hw_topo, HWLOC_OBJ_SOCKET);
         }
+        //int num_pus_per_node = num_pus / num_nodes;
+        // use n_cores_per_node instead
         //printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n", num_nodes,
         //        num_pus, num_cores, num_pus/num_nodes);
 
@@ -937,9 +947,17 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         task_core = (int *) malloc(num_tasks * sizeof (int));
         task_core_prev = (int *) malloc(num_tasks * sizeof (int));
         
-        for (i = 0; i < num_tasks; i++) {
+        // Calculate initial mapping
+        //for (i = 0; i < num_tasks; i++) {
             //task_core[i] = task_core_prev[i] = -1;
-            task_core[i] = task_core_prev[i] = i;
+        //    task_core[i] = task_core_prev[i] = i;
+        //}
+        if (balanceMapInit == false) {
+            // Default initial mapping is packed
+            map_packed();
+        }
+        else {
+            map_numa_balanced();
         }
         
         //map_rr_node();
@@ -981,10 +999,12 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
             //}
             printf("[DeLoc] Poll interval: %lu (%lu-%lu) microsecs, max_count: %d, max_n_map: %d\n", pollInterval,
                      pollIntervalMin, pollIntervalMax, pollNMax, mapNMax);
-            printf("[DeLoc] Number of tasks=%d, number of pairs=%d, pairs_eq_ratio=%.1f, mapping_diff_threshold=%d\n",
-                    num_tasks, npairs, pairs_equal_ratio, mapping_diff_threshold);
-            printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d\n",
-                    num_nodes, num_pus, num_cores, num_pus/num_nodes);
+            //printf("[DeLoc] Number of tasks=%d, number of pairs=%d, pairs_eq_ratio=%.1f, mapping_diff_threshold=%d\n",
+                    //num_tasks, npairs, pairs_equal_ratio, mapping_diff_threshold);
+            printf("[DeLoc] Number of tasks=%d, number of pairs=%d, mapping_diff_min_threshold=%d (tasks)\n",
+                    num_tasks, npairs, mapping_diff_threshold);
+            printf("[DeLoc] Topology num_nodes=%d, num_pus=%d, num_cores=%d, n_pus_per_node=%d, numaBalancedInit=%d\n",
+                    num_nodes, num_pus, num_cores, num_pus/num_nodes, balanceMapInit);
     
             printf("[NUMACTL] (Node IDs):(Physical core IDs)\n");
             for (i = 0; i < num_cores; i++) {
@@ -993,13 +1013,15 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
             putchar('\n');
         }
 
-        // Perform initial mapping
+        // Apply the initial mapping
         usleep(MASTER_DELAY);   // Delay to let all processes finish updating their pid
         //get_all_task_shm();
         get_all_pids_shm();
+        //if (balanceMapInit == false) {
         for (i = 0; i < num_tasks; i++) {
             map_proc(task_pids[i], task_core[i]);
         }
+        //}
     }
     stopDelocMon = false;
 
@@ -2217,4 +2239,33 @@ void map_rr_node() {
         cc_ids[nn]++;
     }
     free(cc_ids);
+}
+
+void map_numa_balanced() {
+    int slot_each = num_tasks / num_nodes;
+    int slot_remain = num_tasks % num_nodes;
+
+    int n_start = 0;
+    int s = 0;
+    for (int t = 0; t < num_tasks; ++t) {
+        if (s >= slot_each) {
+            if ((slot_remain > 0) && (n_cores_per_node > slot_each)) {
+                task_core[t] = task_core_prev[t] = n_start + s;
+                --slot_remain;
+            }
+            n_start += n_cores_per_node;
+            s = 0;
+        }
+        else {
+            task_core[t] = task_core_prev[t] = n_start + s;
+            ++s;
+        }
+    }
+}
+
+void map_packed() {
+    for (int t = 0; t < num_tasks; t++) {
+        //task_core[i] = task_core_prev[i] = -1;
+        task_core[t] = task_core_prev[t] = t;
+    }
 }
