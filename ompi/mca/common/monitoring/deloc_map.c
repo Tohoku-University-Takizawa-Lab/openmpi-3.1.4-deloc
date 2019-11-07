@@ -131,13 +131,15 @@ void * monitor_exec_cmp_measure(void *args) {
                     //printf("Task-%d: pid #%d ", i, task_pids[i]);
                     if (task_core[i] != task_core_prev[i]) {
                         map_proc(task_pids[i], task_core[i]);
+                        // Update prev mapping
+                        task_core_prev[i] = task_core[i];
                     }
                 }
                 //clock_gettime(CLOCK_MONOTONIC, &end);
                 //mapping_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
                
                 // Save current map to prev
-                update_task_core_prev();
+                //update_task_core_prev();
             
                 n_comm_changed++;
                 if (export_comm_mat_part == true)
@@ -232,10 +234,12 @@ void * monitor_exec_cmp(void *args) {
                 for (i = 0; i < num_tasks; i++) {
                     if (task_core[i] != task_core_prev[i]) {
                         map_proc(task_pids[i], task_core[i]);
+                        // Update prev mapping
+                        task_core_prev[i] = task_core[i];
                     }
                 }
                 // Save current map to prev
-                update_task_core_prev();
+                //update_task_core_prev();
 
                 n_comm_changed++;
             }
@@ -354,11 +358,13 @@ void * monitor_exec_measure(void *args) {
                     //printf("Task-%d: pid #%d ", i, task_pids[i]);
                     if (task_core[i] != task_core_prev[i]) {
                         map_proc(task_pids[i], task_core[i]);
+                        // Update prev mapping
+                        task_core_prev[i] = task_core[i];
                     }
                     //get_proc_affinity(task_pids[i]);
                 }
                 // Save current map to prev
-                update_task_core_prev();
+                //update_task_core_prev();
             
                 clock_gettime(CLOCK_MONOTONIC, &end);
                 mapping_time_used += ((end.tv_sec - start.tv_sec)*1000) + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
@@ -957,7 +963,8 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
             map_packed();
         }
         else {
-            map_numa_balanced();
+            //map_numa_balanced();
+            map_rr_node();
         }
         
         //map_rr_node();
@@ -1020,6 +1027,7 @@ void init_deloc(orte_proc_info_t orte_proc_info, size_t *pml_count, size_t *pml_
         //if (balanceMapInit == false) {
         for (i = 0; i < num_tasks; i++) {
             map_proc(task_pids[i], task_core[i]);
+            task_core_prev[i] = task_core[i];
         }
         //}
     }
@@ -2054,6 +2062,7 @@ void map_deloc() {
     //print_task_core();
 }
 
+// DeLoc map considering the previous mapping
 void map_deloc_if() {
     int i, n_mapped, t1_node;
     
@@ -2250,14 +2259,14 @@ void map_numa_balanced() {
     for (int t = 0; t < num_tasks; ++t) {
         if (s >= slot_each) {
             if ((slot_remain > 0) && (n_cores_per_node > slot_each)) {
-                task_core[t] = task_core_prev[t] = n_start + s;
+                task_core[t] = n_start + s;
                 --slot_remain;
             }
             n_start += n_cores_per_node;
             s = 0;
         }
         else {
-            task_core[t] = task_core_prev[t] = n_start + s;
+            task_core[t] = n_start + s;
             ++s;
         }
     }
@@ -2266,6 +2275,6 @@ void map_numa_balanced() {
 void map_packed() {
     for (int t = 0; t < num_tasks; t++) {
         //task_core[i] = task_core_prev[i] = -1;
-        task_core[t] = task_core_prev[t] = t;
+        task_core[t] = t;
     }
 }
