@@ -1,4 +1,4 @@
-# OnDeloc-MPI: an automatic MPI process mapping for adapting to tasks' communication behaviors and coordinating locality and memory congestion.
+## OnDeloc-MPI: an automatic MPI process mapping for adapting to tasks' communication behaviors and coordinating locality and memory congestion.
 
 Please see the following paper for more details:
 
