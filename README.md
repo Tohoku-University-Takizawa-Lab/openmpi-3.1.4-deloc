@@ -1,6 +1,8 @@
 ## OnDeloc-MPI: an automatic MPI process mapping for adapting to tasks' communication behaviors and coordinating locality and memory congestion.
 
-Please see the following paper for more details:
+Please see the following papers for more details:
+
+M. Agung, M. A. Amrizal, R. Egawa and H. Takizawa, "An Automatic MPI Process Mapping Method Considering Locality and Memory Congestion on NUMA Systems," 2019 IEEE 13th International Symposium on Embedded Multicore/Many-core Systems-on-Chip (MCSoC), 2019, pp. 17-24, doi: 10.1109/MCSoC.2019.00010.
 
 Agung, M., Amrizal, M. A., Egawa, R., & Takizawa, H. (2020). Online MPI Process Mapping for Coordinating Locality and Memory Congestion on NUMA Systems. Supercomputing Frontiers and Innovations, 7(1), 71–90. https://doi.org/10.14529/jsfi200104
 
